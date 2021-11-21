@@ -1,12 +1,17 @@
 void _ZGAN10HelloWorld4testEJvv()
 {
-	printf("Hello, World!\n");
+	/* Initialize terminal interface */
+	terminal_initialize();
+
+	/* Newline support is left as an exercise. */
+	terminal_writestring("Hello, kernel World!\n");
+	// printf("Hello, World!\n");
 }
 
-void main()
-{
-	_ZN10HelloWorld4mainEJvP6JArrayIPN4java4lang6StringEE();
-}
+// void main()
+// {
+// 	_ZN10HelloWorld4mainEJvP6JArrayIPN4java4lang6StringEE();
+// }
 
 /* runtime functions in libgcj */
 void _ZN4java4lang6ObjectC1Ev() {}
