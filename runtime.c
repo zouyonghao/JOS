@@ -1,4 +1,4 @@
-void _ZGAN10HelloWorld4testEJvv()
+void _ZGAN6Kernel4testEJvv()
 {
 	/* Initialize terminal interface */
 	terminal_initialize();

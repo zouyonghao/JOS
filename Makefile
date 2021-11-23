@@ -16,7 +16,7 @@ QEMUCMD = qemu-system-x86_64
 QEMUFLAGS = -curses -drive format=raw,file=
 
 OBJDIR = ./obj
-OBJLIST = ./obj/vga.o ./obj/bootloader.o ./obj/HelloWorld.o ./obj/runtime.o
+OBJLIST = ./obj/vga.o ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
 BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
@@ -25,9 +25,9 @@ BB.bin : $(BUILDDIR) $(OBJLIST)
 qemu: BB.bin
 			  $(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
-$(OBJDIR)/HelloWorld.o:
-				# gcj -s HelloWorld.java -o $(OBJDIR)/HelloWorld.s
-				gcj -c HelloWorld.java -o $(OBJDIR)/HelloWorld.o
+$(OBJDIR)/Kernel.o:
+				gcj -S Kernel.java -o $(OBJDIR)/Kernel.s
+				gcj -c Kernel.java -o $(OBJDIR)/Kernel.o
 				gcc -c runtime.c -o $(OBJDIR)/runtime.o
 
 $(OBJDIR)/vga.o : vga.c $(OBJDIR)

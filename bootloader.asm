@@ -223,7 +223,7 @@ lmode:
 	mov rbp, rsp		# initialize stack to top of kernel memory
 
 	# call init		# init()
-	call _ZN10HelloWorld4mainEJvP6JArrayIPN4java4lang6StringEE # call java main
+	call _ZN6Kernel4mainEJvP6JArrayIPN4java4lang6StringEE # call java main
 
 	cli
 	hlt
