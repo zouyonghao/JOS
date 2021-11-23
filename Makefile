@@ -26,7 +26,7 @@ qemu: BB.bin
 			  $(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
 $(OBJDIR)/HelloWorld.o:
-				gcj -s HelloWorld.java -o $(OBJDIR)/HelloWorld.s
+				# gcj -s HelloWorld.java -o $(OBJDIR)/HelloWorld.s
 				gcj -c HelloWorld.java -o $(OBJDIR)/HelloWorld.o
 				gcc -c runtime.c -o $(OBJDIR)/runtime.o
 
