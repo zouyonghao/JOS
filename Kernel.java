@@ -4,10 +4,10 @@ public class Kernel {
 	public static void main(String[] args) {
 		long terminalBuffer = 0xB8000L;
 		int index = 0;
-		writeMemory(terminalBuffer + (index++), 'H');
-		writeMemory(terminalBuffer + (index++), 'e');
-		writeMemory(terminalBuffer + (index++), 'l');
-		writeMemory(terminalBuffer + (index++), 'l');
-		writeMemory(terminalBuffer + (index++), 'o');
+		writeMemory(terminalBuffer + (index+=2), 'H');
+		writeMemory(terminalBuffer + (index+=2), 'e');
+		writeMemory(terminalBuffer + (index+=2), 'l');
+		writeMemory(terminalBuffer + (index+=2), 'l');
+		writeMemory(terminalBuffer + (index+=2), 'o');
 	}
 }
