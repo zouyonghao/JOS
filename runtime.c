@@ -1,11 +1,8 @@
-void _ZGAN6Kernel4testEJvv()
-{
-	/* Initialize terminal interface */
-	terminal_initialize();
+#include <stdint.h>
 
-	/* Newline support is left as an exercise. */
-	terminal_writestring("Hello, kernel World!\n");
-	// printf("Hello, World!\n");
+void _ZGAN6Kernel11writeMemoryEJvxw(long addr, char _byte)
+{
+	*((uint16_t*) addr) = _byte;
 }
 
 // void main()
