@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Wpedantic -std=gnu99 -ffreestanding
-OPTFLAGS = -O2
+OPTFLAGS = -O0
 64BITFLAGS = -mno-red-zone -mno-mmx -mno-sse -mno-sse2
 
 AS = as
@@ -26,9 +26,7 @@ qemu: BB.bin
 			  $(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
 $(OBJDIR)/Kernel.o: Kernel.java runtime.c
-				gcj -S Kernel.java -o $(OBJDIR)/Kernel.s
-				gcj -c Kernel.java -o $(OBJDIR)/Kernel.o
-				gcc -c runtime.c -o $(OBJDIR)/runtime.o
+				./build_kernel.o.sh
 
 # $(OBJDIR)/vga.o : vga.c $(OBJDIR)
 # 				$(CC) -c vga.c -o $(OBJDIR)/vga.o $(CFLAGS) $(OPTFLAGS) $(DIRECTIVES)
@@ -43,5 +41,6 @@ $(OBJDIR) :
 				test ! -d $(OBJDIR) && mkdir $(OBJDIR) 
 
 clean :
-				rm $(OBJLIST)
-				rm $(BUILDDIR)/BB.bin
+				rm -rf generated-llvm
+				rm -rf $(OBJLIST)
+				rm -f $(BUILDDIR)/BB.bin
