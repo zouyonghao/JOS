@@ -1,5 +1,3 @@
-cd ~/graal/vm
-export JAVA_HOME=$(mx --dynamicimports /substratevm graalvm-home)
-echo $JAVA_HOME
+export JAVA_HOME=./graalvm-jdk
 export PATH=$JAVA_HOME/bin:$PATH
-cd -
+echo "Using GraalVM JDK at: $JAVA_HOME"

@@ -3,3 +3,8 @@ HelloWorld
 build
 obj
 generated-llvm
+*.class
+*.jar
+graal/*/mxbuild/
+labs-jdk
+mx

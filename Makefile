@@ -20,27 +20,27 @@ OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
 BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
-				$(CC) $(OBJLIST) -o $(BUILDDIR)/BB.bin $(CFLAGS) $(LDFLAGS) $(64BITFLAGS) $(DIRECTIVES) -T $(LINKER) $(OPTFLAGS)
+	$(CC) $(OBJLIST) -o $(BUILDDIR)/BB.bin $(CFLAGS) $(LDFLAGS) $(64BITFLAGS) $(DIRECTIVES) -T $(LINKER) $(OPTFLAGS)
 
 qemu: BB.bin
-			  $(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
+	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
 $(OBJDIR)/Kernel.o: Kernel.java runtime.c
-				./build_kernel.o.sh
+	./build_kernel.o.sh
 
 # $(OBJDIR)/vga.o : vga.c $(OBJDIR)
 # 				$(CC) -c vga.c -o $(OBJDIR)/vga.o $(CFLAGS) $(OPTFLAGS) $(DIRECTIVES)
 
 $(OBJDIR)/bootloader.o : bootloader.asm $(OBJDIR)
-				$(AS) bootloader.asm -o $(OBJDIR)/bootloader.o $(ASFLAGS)
+	$(AS) bootloader.asm -o $(OBJDIR)/bootloader.o $(ASFLAGS)
 
 $(BUILDDIR) : 
-				test ! -d $(BUILDDIR) && mkdir $(BUILDDIR) 
+	test ! -d $(BUILDDIR) && mkdir $(BUILDDIR) 
 
 $(OBJDIR) :
-				test ! -d $(OBJDIR) && mkdir $(OBJDIR) 
+	test ! -d $(OBJDIR) && mkdir $(OBJDIR) 
 
 clean :
-				rm -rf generated-llvm
-				rm -rf $(OBJLIST)
-				rm -f $(BUILDDIR)/BB.bin
+	rm -rf generated-llvm
+	rm -rf $(OBJLIST)
+	rm -f $(BUILDDIR)/BB.bin
