@@ -223,7 +223,7 @@ lmode:
 	mov rbp, rsp		# initialize stack to top of kernel memory
 
 	# call init		# init()
-	call Kernel_start_9b567e199059b822ec81bbd398c9f1dae3392309 # call java main
+	call Kernel_startKernel_l8guCW92MgCfR8000e7aQB # call java main
 
 	cli
 	hlt
