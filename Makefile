@@ -13,7 +13,7 @@ LDFLAGS= -lgcc -nostdlib
 
 # ALT-2, then type quit
 QEMUCMD = qemu-system-x86_64
-QEMUFLAGS = -curses -drive format=raw,file=
+QEMUFLAGS = -nographic -display curses -drive format=raw,file=
 
 OBJDIR = ./obj
 OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
@@ -25,8 +25,12 @@ BB.bin : $(BUILDDIR) $(OBJLIST)
 qemu: BB.bin
 	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
-$(OBJDIR)/Kernel.o: Kernel.java runtime.c
+$(OBJDIR)/Kernel.o: Kernel.java
 	./build_kernel.o.sh
+
+$(OBJDIR)/runtime.o: runtime.c
+	. ./use_graalvm.sh ; \
+	$${GRAALVM_HOME}/lib/llvm/bin/clang -c runtime.c -o obj/runtime.o
 
 # $(OBJDIR)/vga.o : vga.c $(OBJDIR)
 # 				$(CC) -c vga.c -o $(OBJDIR)/vga.o $(CFLAGS) $(OPTFLAGS) $(DIRECTIVES)

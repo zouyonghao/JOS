@@ -19,25 +19,15 @@ echo "Java version: $(java -version 2>&1 | head -1)"
 
 cd graal
 
-# First build the SubstrateVM components (includes LLVM backend)
-echo "Building SubstrateVM with LLVM backend..."
-cd substratevm
-mx build --all
-
 # Now build the VM distribution
 echo "Building VM distribution..."
-cd ../vm
-mx --dynamicimports /substratevm graalvm-show
+cd vm
+mx --dynamicimports /sulong,/substratevm --exclude-components=nju,nil build
 
 # Get the built GraalVM home and create it
 echo "Creating GraalVM distribution..."
-export GRAALVM_HOME=$(mx --dynamicimports /substratevm graalvm-home)
+export GRAALVM_HOME=$(mx --dynamicimports /sulong,/substratevm --exclude-components=nju,nil graalvm-home)
 echo "GraalVM will be at: $GRAALVM_HOME"
-
-# Try to build the distribution
-# mx --dynamicimports /substratevm graalvm-dist
-mx --dynamicimports /sulong,/substratevm --exclude-components=nju,nic,ni,nil,llp build
-mx --dynamicimports /sulong,/substratevm --exclude-components=nju,nic,ni,nil,llp graalvm-dist
 
 # Verify what we have
 echo "Checking build results..."
