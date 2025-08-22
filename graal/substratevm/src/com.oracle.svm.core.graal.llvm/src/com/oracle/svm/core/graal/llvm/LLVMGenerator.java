@@ -243,7 +243,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         builder.setFunctionAttribute(Attribute.NoInline);
         builder.setFunctionAttribute(Attribute.NoRedZone);
         builder.setFunctionAttribute(Attribute.NoRealignStack);
-        builder.setGarbageCollector(GCStrategy.CompressedPointers);
+        // builder.setGarbageCollector(GCStrategy.CompressedPointers);
         builder.setFunctionCallingConvention(LLVMCallingConvention.GraalCallingConvention);
         builder.setPersonalityFunction(getFunction(LLVMExceptionUnwind.getPersonalityStub(getMetaAccess())));
 
@@ -930,7 +930,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
                 LLVMTypeRef wrapperType = prependArgumentTypes(calleeType, 0, tempBuilder.rawPointerType(), LLVMIRBuilder.typeOf(callee));
                 transitionWrapper = tempBuilder.addFunction(wrapperName, wrapperType);
                 LLVMIRBuilder.setLinkage(transitionWrapper, LinkageType.LinkOnce);
-                tempBuilder.setGarbageCollector(transitionWrapper, GCStrategy.CompressedPointers);
+                // tempBuilder.setGarbageCollector(transitionWrapper, GCStrategy.CompressedPointers);
                 tempBuilder.setFunctionCallingConvention(transitionWrapper, LLVMCallingConvention.GraalCallingConvention);
                 tempBuilder.setFunctionAttribute(transitionWrapper, Attribute.NoInline);
 
