@@ -21,6 +21,7 @@ $GRAALVM_HOME/bin/native-image \
     -R:StackSize=0 \
     -R:-InstallSegfaultHandler \
     -H:-PreserveFramePointer \
+    -Dsvm.kernelFriendlyNames=true \
     Kernel
 
 rm -f kernel Kernel.class
@@ -31,7 +32,7 @@ if [ -d "generated-llvm" ]; then
     echo "Generated LLVM directory exists, looking for bitcode files..."
     find generated-llvm -name "*.bc" -o -name "*.ll" | head -5
     
-    BC_FILE=$(grep startKernel generated-llvm/*/llvm/f*.bc -a -l | head -1)
+    BC_FILE=$(grep -l "startKernel" generated-llvm/*/llvm/f*.bc | head -1)
     if [ -n "$BC_FILE" ]; then
         echo "Using bitcode file: $BC_FILE"
         

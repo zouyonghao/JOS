@@ -58,7 +58,8 @@ public class UniqueShortNameProviderDefaultImpl implements UniqueShortNameProvid
     public static class UseDefault implements BooleanSupplier {
 
         public static boolean useDefaultProvider() {
-            return !OS.LINUX.isCurrent() || !SubstrateOptions.useDebugInfoGeneration();
+            return !Boolean.getBoolean("svm.kernelFriendlyNames") && 
+                   (!OS.LINUX.isCurrent() || !SubstrateOptions.useDebugInfoGeneration());
         }
 
         @Override

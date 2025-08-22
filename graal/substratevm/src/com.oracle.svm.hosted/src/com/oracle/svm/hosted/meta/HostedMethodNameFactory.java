@@ -89,12 +89,15 @@ public class HostedMethodNameFactory implements InternalFeature {
         }
 
         MethodNameInfo initialName = generator.generateMethodNameInfo(0);
+        System.out.println("initialName:" + initialName.uniqueShortName());
         result = initialName;
 
         do {
             int collisionCount = methodNameCount.merge(initialName.uniqueShortName(), 0, (oldValue, value) -> oldValue + 1);
             if (collisionCount != 0) {
                 result = generator.generateMethodNameInfo(collisionCount);
+                System.out.println("collisionCount:" + collisionCount);
+                System.out.println("newName:" + result.uniqueShortName());
             }
             /*
              * Redo if the short name is reserved.
