@@ -378,7 +378,7 @@ public class ForeignFunctionsFeature implements InternalFeature {
         if (!SubstrateOptions.isForeignAPIEnabled()) {
             return false;
         }
-        UserError.guarantee(!SubstrateOptions.useLLVMBackend(), "Support for the Foreign Function and Memory API is not available with the LLVM backend.");
+        // UserError.guarantee(!SubstrateOptions.useLLVMBackend(), "Support for the Foreign Function and Memory API is not available with the LLVM backend.");
         return true;
     }
 
