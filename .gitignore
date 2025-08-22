@@ -8,3 +8,9 @@ generated-llvm
 graal/*/mxbuild/
 labs-jdk
 mx
+graal/*/__pycache__
+graal/*/*/__pycache__
+graal/truffle/mx.truffle/mx_polybench/__pycache__/
+graal/sdk/latest_graalvm
+graal/sdk/latest_graalvm_home
+svm_err_*.md

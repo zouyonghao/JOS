@@ -1,4 +1,4 @@
-sudo apt install build-essential cmake zlib1g-dev ninja-build
+sudo apt install build-essential cmake zlib1g-dev ninja-build libstdc++-14-dev
 wget https://github.com/graalvm/mx/archive/refs/tags/7.60.2.tar.gz
 tar zxf 7.60.2.tar.gz
 mv mx-7.60.2/ mx
