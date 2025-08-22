@@ -68,7 +68,7 @@ public final class StackOverflowCheckFeature implements InternalFeature {
          */
         ListIterator<BasePhase<? super MidTierContext>> position = suites.getMidTier().findPhase(LoweringPhase.class);
         position.previous();
-        position.add(new InsertStackOverflowCheckPhase());
+        // position.add(new InsertStackOverflowCheckPhase());
     }
 
     @Override
