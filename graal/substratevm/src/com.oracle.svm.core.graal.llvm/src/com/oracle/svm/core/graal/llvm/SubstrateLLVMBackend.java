@@ -85,8 +85,8 @@ public class SubstrateLLVMBackend extends SubstrateBackend {
 
         LLVMGenerator generator = new LLVMGenerator(getProviders(), result, null, method, 0);
         generator.createJNITrampoline(threadArg, threadIsolateOffset, methodIdArg, methodObjEntryPointOffset);
-        byte[] bitcode = generator.getBitcode();
-        result.setTargetCode(bitcode, bitcode.length);
+        byte[] llvmir = generator.getLLVMIR();
+        result.setTargetCode(llvmir, llvmir.length);
 
         return result;
     }
@@ -123,8 +123,8 @@ public class SubstrateLLVMBackend extends SubstrateBackend {
 
             /* LLVM generation */
             generate(nodeBuilder, graph);
-            byte[] bitcode = generator.getBitcode();
-            result.setTargetCode(bitcode, bitcode.length);
+            byte[] llvmir = generator.getLLVMIR();
+            result.setTargetCode(llvmir, llvmir.length);
 
             try (DebugContext.Scope s = debug.scope("LIRStages", nodeBuilder, null, null)) {
                 /* Dump LIR along with HIR (the LIR is looked up from context) */

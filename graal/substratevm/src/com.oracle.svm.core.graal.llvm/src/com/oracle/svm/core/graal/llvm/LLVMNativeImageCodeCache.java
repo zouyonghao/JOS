@@ -221,15 +221,35 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
     }
 
     private String getBitcodeFilename(int id) {
-        return "f" + id + ".bc";
+        // Use function name instead of sequential number, with .ll extension for text IR
+        String functionName = methodIndex[id].getUniqueShortName();
+        // Replace characters that might be problematic in filenames
+        functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
+        return functionName + ".ll";
     }
 
     private String getBatchBitcodeFilename(int id) {
-        return ((batchSize == 1) ? "f" : "b") + id + ".bc";
+        if (batchSize == 1) {
+            // Single function per batch - use function name with .ll extension
+            String functionName = methodIndex[id].getUniqueShortName();
+            functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
+            return functionName + ".ll";
+        } else {
+            // Multiple functions per batch - use descriptive batch name with .ll extension
+            return "batch" + id + ".ll";
+        }
     }
 
     private String getBatchOptimizedFilename(int id) {
-        return ((batchSize == 1) ? "f" : "b") + id + "o.bc";
+        if (batchSize == 1) {
+            // Single function per batch - use function name with .ll extension for optimized IR
+            String functionName = methodIndex[id].getUniqueShortName();
+            functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
+            return functionName + "_opt.ll";
+        } else {
+            // Multiple functions per batch - use descriptive batch name with .ll extension
+            return "batch" + id + "_opt.ll";
+        }
     }
 
     private Path getBatchCompiledPath(int id) {
@@ -237,7 +257,15 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
     }
 
     private String getBatchCompiledFilename(int id) {
-        return ((batchSize == 1) ? "f" : "b") + id + ".o";
+        if (batchSize == 1) {
+            // Single function per batch - use function name
+            String functionName = methodIndex[id].getUniqueShortName();
+            functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
+            return functionName + ".o";
+        } else {
+            // Multiple functions per batch - use descriptive batch name
+            return "batch" + id + ".o";
+        }
     }
 
     private Path getLinkedPath() {

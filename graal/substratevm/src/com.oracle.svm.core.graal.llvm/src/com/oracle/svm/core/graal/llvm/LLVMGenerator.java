@@ -274,6 +274,13 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         return bitcode;
     }
 
+    byte[] getLLVMIR() {
+        assert builder.verifyBitcode();
+        String ir = builder.getLLVMIR();
+        builder.close();
+        return ir.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private static String getFunctionName(ResolvedJavaMethod method) {
         return ((HostedMethod) method).getUniqueShortName();
     }

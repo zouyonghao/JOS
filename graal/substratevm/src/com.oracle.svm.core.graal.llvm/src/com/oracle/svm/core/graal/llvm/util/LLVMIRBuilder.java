@@ -108,6 +108,15 @@ public class LLVMIRBuilder implements AutoCloseable {
         return bitcode;
     }
 
+    public String getLLVMIR() {
+        BytePointer irString = LLVM.LLVMPrintModuleToString(module);
+        try {
+            return irString.getString();
+        } finally {
+            LLVM.LLVMDisposeMessage(irString);
+        }
+    }
+
     public boolean verifyBitcode() {
         if (LLVM.LLVMVerifyModule(module, LLVM.LLVMPrintMessageAction, new BytePointer((Pointer) null)) == TRUE) {
             LLVM.LLVMDumpModule(module);
