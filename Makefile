@@ -13,7 +13,7 @@ LDFLAGS= -lgcc -nostdlib
 
 # ALT-2, then type quit
 QEMUCMD = qemu-system-x86_64
-QEMUFLAGS = -nographic -display curses -drive format=raw,file=
+QEMUFLAGS = -nographic -display curses -monitor none -no-reboot -drive format=raw,file=
 
 OBJDIR = ./obj
 OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
