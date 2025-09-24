@@ -118,6 +118,15 @@ public class SubstrateLLVMBackend extends SubstrateBackend {
             assert graph.isAfterStage(StageFlag.VALUE_PROXY_REMOVAL);
 
             ResolvedJavaMethod method = graph.method();
+
+            // Skip LLVM IR generation for native methods - they are implemented in native code
+            if (method.isNative()) {
+                debug.log("Skipping LLVM IR generation for native method: %s", method.format("%H.%n(%p)"));
+                // Set empty target code to indicate no LLVM IR was generated
+                result.setTargetCode(new byte[0], 0);
+                return;
+            }
+
             LLVMGenerator generator = new LLVMGenerator(getProviders(), result, graph, method, LLVMOptions.IncludeLLVMDebugInfo.getValue());
             NodeLLVMBuilder nodeBuilder = newNodeLLVMBuilder(graph, generator);
 
