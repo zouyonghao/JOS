@@ -89,7 +89,7 @@ public class HostedMethodNameFactory implements InternalFeature {
         }
 
         MethodNameInfo initialName = generator.generateMethodNameInfo(0);
-        System.out.println("initialName:" + initialName.uniqueShortName());
+        // System.out.println("initialName:" + initialName.uniqueShortName());
         result = initialName;
 
         do {

@@ -27,10 +27,10 @@ package com.oracle.svm.core.graal.llvm.util;
 import java.util.Arrays;
 import java.util.List;
 
+import com.oracle.svm.core.option.HostedOptionKey;
+
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionType;
-
-import com.oracle.svm.core.option.HostedOptionKey;
 
 public class LLVMOptions {
 
@@ -52,9 +52,13 @@ public class LLVMOptions {
     @Option(help = "Use LLVM to emit data section")//
     public static final HostedOptionKey<Boolean> UseLLVMDataSection = new HostedOptionKey<>(false);
 
+    @Option(help = "Regular expression applied to LLVM function filenames (.ll) to decide which ones should be kept on disk after compilation. Leave empty to keep all functions.",
+                    type = OptionType.Debug)//
+    public static final HostedOptionKey<String> LLVMPreserveFunctionsRegex = new HostedOptionKey<>("");
+
     @Option(help = "Factor used to multiply the page size of the machine to obtain the data section batch size.")//
     public static final HostedOptionKey<Integer> LLVMDataSectionBatchSizeFactor = new HostedOptionKey<>(10);
 
     public static final List<HostedOptionKey<?>> allOptions = Arrays.asList(IncludeLLVMDebugInfo, DumpLLVMStackMap, LLVMMaxFunctionsPerBatch, CustomLD, BitcodeOptimizations, UseLLVMDataSection,
-                    LLVMDataSectionBatchSizeFactor);
+                    LLVMDataSectionBatchSizeFactor, LLVMPreserveFunctionsRegex);
 }

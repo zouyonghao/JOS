@@ -530,10 +530,36 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     private long nextConstantId = 0L;
 
     private LLVMValueRef getLLVMPlaceholderForConstant(Constant constant) {
+        // For string constants, generate them directly in LLVM IR instead of external symbols
+        if (constant instanceof JavaConstant) {
+            JavaConstant javaConstant = (JavaConstant) constant;
+            if (javaConstant.getJavaKind() == JavaKind.Object && !javaConstant.isNull()) {
+                // Try to extract string value if it's a string constant
+                try {
+                    String stringValue = javaConstant.toValueString();
+                    if (stringValue != null && !stringValue.isEmpty()) {
+                        // Check if we already have a symbol for this constant
+                        String symbolName = constants.get(constant);
+                        if (symbolName == null) {
+                            symbolName = "constant_" + functionName + "_" + nextConstantId++;
+                            constants.put(constant, symbolName);
+                        }
+
+                        // Create a global string constant directly in LLVM IR
+                        LLVMValueRef stringPtr = builder.buildGlobalStringPtr(stringValue);
+                        return stringPtr;
+                    }
+                } catch (Exception e) {
+                    // Fall through to original logic if string extraction fails
+                }
+            }
+        }
+        
+        // Original logic for non-string constants
         String symbolName = constants.get(constant);
         boolean uncompressedObject = isUncompressedObjectConstant(constant);
         if (symbolName == null) {
-            symbolName = "constant_" + functionName + "#" + nextConstantId++;
+            symbolName = "constant_" + functionName + "_" + nextConstantId++;
             constants.put(constant, symbolName);
 
             Constant storedConstant = uncompressedObject ? ((CompressibleConstant) constant).compress() : constant;

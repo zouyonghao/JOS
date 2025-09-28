@@ -44,6 +44,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.Platform;
@@ -66,6 +69,7 @@ import com.oracle.svm.core.graal.llvm.util.LLVMOptions;
 import com.oracle.svm.core.graal.llvm.util.LLVMStackMapInfo;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicInteger;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.image.NativeImage.NativeTextSectionImpl;
 import com.oracle.svm.hosted.image.NativeImageCodeCache;
@@ -90,8 +94,10 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
     private final LLVMObjectFileReader objectFileReader;
     private final List<ObjectFile.Symbol> globalSymbols = new ArrayList<>();
     private final StackMapDumper stackMapDumper;
+    private final Pattern retainedFunctionsPattern;
 
-    LLVMNativeImageCodeCache(Map<HostedMethod, CompilationResult> compilations, NativeImageHeap imageHeap, Platform targetPlatform, Path tempDir) {
+    LLVMNativeImageCodeCache(Map<HostedMethod, CompilationResult> compilations, NativeImageHeap imageHeap,
+            Platform targetPlatform, Path tempDir) {
         super(compilations, imageHeap, targetPlatform);
 
         try {
@@ -103,6 +109,17 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
 
         this.stackMapDumper = getStackMapDumper(LLVMOptions.DumpLLVMStackMap.hasBeenSet());
         this.objectFileReader = new LLVMObjectFileReader(stackMapDumper);
+
+        String preserveRegex = LLVMOptions.LLVMPreserveFunctionsRegex.getValue();
+        if (preserveRegex != null && !preserveRegex.isEmpty()) {
+            try {
+                retainedFunctionsPattern = Pattern.compile(preserveRegex);
+            } catch (PatternSyntaxException ex) {
+                throw UserError.abort("Invalid regex passed to -H:LLVMPreserveFunctionsRegex: %s", ex.getMessage());
+            }
+        } else {
+            retainedFunctionsPattern = null;
+        }
     }
 
     @Override
@@ -116,13 +133,20 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
     }
 
     @Override
-    @SuppressWarnings({"unused", "try"})
+    @SuppressWarnings({ "unused", "try" })
     public void layoutMethods(DebugContext debug, BigBang bb) {
         try (Indent indent = debug.logAndIndent("layout methods")) {
             BatchExecutor executor = new BatchExecutor(debug, bb);
             try (StopTimer t = TimerCollection.createTimerAndStart("(bitcode)")) {
                 writeBitcode(executor);
             }
+            
+            // Check if we should exit after writing bitcode (LLVM IR files)
+            if (com.oracle.svm.hosted.NativeImageOptions.ExitAfterCompilation.getValue()) {
+                System.out.println("LLVM IR files generated. Exiting as requested by -H:+ExitAfterCompilation option.");
+                return;
+            }
+            
             int numBatches;
             try (StopTimer t = TimerCollection.createTimerAndStart("(prelink)")) {
                 numBatches = createBitcodeBatches(executor, debug);
@@ -133,6 +157,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
             try (StopTimer t = TimerCollection.createTimerAndStart("(postlink)")) {
                 linkCompiledBatches(debug, executor, numBatches);
             }
+            pruneGeneratedBitcode();
         }
     }
 
@@ -142,6 +167,16 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         executor.forEach(getOrderedCompilations(), pair -> (debugContext) -> {
             int id = num.incrementAndGet();
             methodIndex[id] = pair.getLeft();
+
+            // Early filtering: only write bitcode for functions matching the regex
+            if (retainedFunctionsPattern != null) {
+                String functionName = pair.getLeft().getUniqueShortName();
+                String sanitizedName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
+                String fileName = sanitizedName + ".ll";
+                if (!retainedFunctionsPattern.matcher(fileName).find()) {
+                    return; // Skip non-matching functions entirely
+                }
+            }
 
             try (FileOutputStream fos = new FileOutputStream(getBitcodePath(id).toString())) {
                 fos.write(pair.getRight().getTargetCode());
@@ -162,14 +197,30 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         if (batchSize == 0) {
             batchSize = methodIndex.length;
         }
-        int numBatches = NumUtil.divideAndRoundUp(methodIndex.length, batchSize);
-        if (batchSize > 1) {
+
+        // Only process functions that actually have bitcode files (i.e., passed the
+        // filter)
+        List<String> existingBitcodeFiles = new ArrayList<>();
+        for (int i = 0; i < methodIndex.length; i++) {
+            Path bitcodeFile = getBitcodePath(i);
+            if (Files.exists(bitcodeFile)) {
+                existingBitcodeFiles.add(getBitcodeFilename(i));
+            }
+        }
+
+        if (existingBitcodeFiles.isEmpty()) {
+            return 0; // No functions to process
+        }
+
+        int numBatches = NumUtil.divideAndRoundUp(existingBitcodeFiles.size(), batchSize);
+        if (batchSize > 1 && existingBitcodeFiles.size() > 1) {
             /* Avoid empty batches with small batch sizes */
-            numBatches -= (numBatches * batchSize - methodIndex.length) / batchSize;
+            numBatches -= (numBatches * batchSize - existingBitcodeFiles.size()) / batchSize;
 
             executor.forEach(numBatches, batchId -> (debugContext) -> {
-                List<String> batchInputs = IntStream.range(getBatchStart(batchId), getBatchEnd(batchId)).mapToObj(this::getBitcodeFilename)
-                                .collect(Collectors.toList());
+                int start = batchId * batchSize;
+                int end = Math.min(start + batchSize, existingBitcodeFiles.size());
+                List<String> batchInputs = existingBitcodeFiles.subList(start, end);
                 llvmLink(debug, getBatchBitcodeFilename(batchId), batchInputs, basePath, this::getFunctionName);
             });
         }
@@ -214,14 +265,13 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         long codeAreaSize = textSectionInfo.getCodeSize();
         assert codeAreaSize <= Integer.MAX_VALUE;
         setCodeAreaSize((int) textSectionInfo.getCodeSize());
-    }
-
-    private Path getBitcodePath(int id) {
+    }    private Path getBitcodePath(int id) {
         return basePath.resolve(getBitcodeFilename(id));
     }
 
     private String getBitcodeFilename(int id) {
-        // Use function name instead of sequential number, with .ll extension for text IR
+        // Use function name instead of sequential number, with .ll extension for text
+        // IR
         String functionName = methodIndex[id].getUniqueShortName();
         // Replace characters that might be problematic in filenames
         functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
@@ -242,7 +292,8 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
 
     private String getBatchOptimizedFilename(int id) {
         if (batchSize == 1) {
-            // Single function per batch - use function name with .ll extension for optimized IR
+            // Single function per batch - use function name with .ll extension for
+            // optimized IR
             String functionName = methodIndex[id].getUniqueShortName();
             functionName = functionName.replaceAll("[^a-zA-Z0-9_]", "_");
             return functionName + "_opt.ll";
@@ -301,7 +352,8 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
                     function = methodIndex[id].getQualifiedName();
                     break;
                 case 'b':
-                    function = "batch " + id + " (f" + getBatchStart(id) + "-f" + getBatchEnd(id) + "). Use -H:LLVMMaxFunctionsPerBatch=1 to compile each method individually.";
+                    function = "batch " + id + " (f" + getBatchStart(id) + "-f" + getBatchEnd(id)
+                            + "). Use -H:LLVMMaxFunctionsPerBatch=1 to compile each method individually.";
                     break;
                 default:
                     throw shouldNotReachHereUnexpectedInput(type);
@@ -310,23 +362,95 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         return function + " (" + basePath.resolve(fileName).toString() + ")";
     }
 
+    private void pruneGeneratedBitcode() {
+        if (retainedFunctionsPattern == null) {
+            return;
+        }
+
+        try (Stream<Path> paths = Files.list(basePath)) {
+            paths.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        String name = path.getFileName().toString();
+                        return name.endsWith(".ll");
+                    })
+                    .forEach(this::maybeDeleteBitcodeFile);
+        } catch (IOException e) {
+            throw new GraalError(e);
+        }
+    }
+
+    private void maybeDeleteBitcodeFile(Path path) {
+        String fileName = path.getFileName().toString();
+        if (shouldKeepBitcodeFile(fileName)) {
+            return;
+        }
+
+        deleteSilently(path);
+
+        String baseName = baseNameWithoutSuffix(fileName);
+        deleteSilently(basePath.resolve(baseName + "_opt.ll"));
+        deleteSilently(basePath.resolve(baseName + ".o"));
+        deleteSilently(basePath.resolve(baseName + ".bc"));
+    }
+
+    private boolean shouldKeepBitcodeFile(String fileName) {
+        if (retainedFunctionsPattern == null) {
+            return true;
+        }
+
+        if (retainedFunctionsPattern.matcher(fileName).find()) {
+            return true;
+        }
+
+        if (fileName.endsWith("_opt.ll")) {
+            String baseName = fileName.substring(0, fileName.length() - "_opt.ll".length()) + ".ll";
+            if (retainedFunctionsPattern.matcher(baseName).find()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static String baseNameWithoutSuffix(String fileName) {
+        String name = fileName;
+        if (name.endsWith("_opt.ll")) {
+            name = name.substring(0, name.length() - "_opt.ll".length());
+        }
+        if (name.endsWith(".ll")) {
+            name = name.substring(0, name.length() - 3);
+        }
+        return name;
+    }
+
+    private static void deleteSilently(Path candidate) {
+        try {
+            Files.deleteIfExists(candidate);
+        } catch (IOException ignored) {
+        }
+    }
+
     @Override
     public void patchMethods(DebugContext debug, RelocatableBuffer relocs, ObjectFile objectFile) {
-        Element rodataSection = objectFile.elementForName(SectionName.RODATA.getFormatDependentName(objectFile.getFormat()));
-        Element dataSection = objectFile.elementForName(SectionName.DATA.getFormatDependentName(objectFile.getFormat()));
+        Element rodataSection = objectFile
+                .elementForName(SectionName.RODATA.getFormatDependentName(objectFile.getFormat()));
+        Element dataSection = objectFile
+                .elementForName(SectionName.DATA.getFormatDependentName(objectFile.getFormat()));
         for (Pair<HostedMethod, CompilationResult> pair : getOrderedCompilations()) {
             CompilationResult result = pair.getRight();
             for (DataPatch dataPatch : result.getDataPatches()) {
                 if (dataPatch.reference instanceof CGlobalDataReference) {
                     CGlobalDataInfo info = ((CGlobalDataReference) dataPatch.reference).getDataInfo();
                     CGlobalDataImpl<?> data = info.getData();
-                    if (info.isSymbolReference() && objectFile.getOrCreateSymbolTable().getSymbol(data.symbolName) == null) {
+                    if (info.isSymbolReference()
+                            && objectFile.getOrCreateSymbolTable().getSymbol(data.symbolName) == null) {
                         objectFile.createUndefinedSymbol(data.symbolName, true);
                     }
 
                     String symbolName = (String) dataPatch.note;
                     if (data.symbolName == null && objectFile.getOrCreateSymbolTable().getSymbol(symbolName) == null) {
-                        objectFile.createDefinedSymbol(symbolName, dataSection, info.getOffset() + RWDATA_CGLOBALS_PARTITION_OFFSET, 0, false, true);
+                        objectFile.createDefinedSymbol(symbolName, dataSection,
+                                info.getOffset() + RWDATA_CGLOBALS_PARTITION_OFFSET, 0, false, true);
                     }
                 } else if (dataPatch.reference instanceof DataSectionReference) {
                     DataSectionReference reference = (DataSectionReference) dataPatch.reference;
@@ -343,10 +467,12 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
     }
 
     @Override
-    public NativeTextSectionImpl getTextSectionImpl(RelocatableBuffer buffer, ObjectFile objectFile, NativeImageCodeCache codeCache) {
+    public NativeTextSectionImpl getTextSectionImpl(RelocatableBuffer buffer, ObjectFile objectFile,
+            NativeImageCodeCache codeCache) {
         return new NativeTextSectionImpl(buffer, objectFile, codeCache) {
             @Override
-            protected void defineMethodSymbol(String name, boolean global, Element section, HostedMethod method, CompilationResult result) {
+            protected void defineMethodSymbol(String name, boolean global, Element section, HostedMethod method,
+                    CompilationResult result) {
                 ObjectFile.Symbol symbol = objectFile.createUndefinedSymbol(name, true);
                 if (global) {
                     globalSymbols.add(symbol);
@@ -421,7 +547,8 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
             getOrderedCompilations().forEach((pair) -> {
                 int startOffset = pair.getLeft().getCodeAddressOffset();
                 CompilationResult compilationResult = pair.getRight();
-                assert startOffset + compilationResult.getTargetCodeSize() == textSectionInfo.getNextOffset(startOffset) : compilationResult.getName();
+                assert startOffset + compilationResult.getTargetCodeSize() == textSectionInfo.getNextOffset(startOffset)
+                        : compilationResult.getName();
 
                 String methodName = textSectionInfo.getSymbol(startOffset);
                 dump("[" + startOffset + "] " + methodName + " (" + compilationResult.getTargetCodeSize() + ")\n");

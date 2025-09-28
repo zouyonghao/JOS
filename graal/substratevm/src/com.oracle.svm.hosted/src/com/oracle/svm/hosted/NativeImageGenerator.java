@@ -669,6 +669,12 @@ public class NativeImageGenerator {
                     codeCache.buildRuntimeMetadata(debug, bb.getSnippetReflectionProvider());
                 }
 
+                // Check if we should exit after compilation
+                if (NativeImageOptions.ExitAfterCompilation.getValue()) {
+                    System.out.println("Compilation finished. Exiting as requested by -H:+ExitAfterCompilation option.");
+                    return;
+                }
+
                 AfterCompilationAccessImpl config = new AfterCompilationAccessImpl(featureHandler, loader, aUniverse, hUniverse, compileQueue.getCompilations(), codeCache, heap, debug,
                                 runtimeConfiguration, nativeLibraries);
                 featureHandler.forEachFeature(feature -> feature.afterCompilation(config));
