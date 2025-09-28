@@ -26,6 +26,8 @@ To compile:
 make BB.bin
 ```
 
+The build uses a custom GraalVM option (`-H:LLVMPreserveFunctionsRegex=Kernel_.*`) so that only the kernel-specific LLVM IR files are retained in `generated-llvm/`, keeping the output focused on your OS code.
+
 To run with qemu:
 ```bash
 make qemu

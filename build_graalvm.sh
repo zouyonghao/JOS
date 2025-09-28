@@ -32,20 +32,20 @@ echo "GraalVM will be at: $GRAALVM_HOME"
 # Verify what we have
 echo "Checking build results..."
 if [ -d "$GRAALVM_HOME" ]; then
-    echo "GraalVM directory exists"
-    ls -la "$GRAALVM_HOME/bin/" || echo "No bin directory yet"
-    
-    # Check if we can find native-image
-    if [ -f "$GRAALVM_HOME/bin/native-image" ]; then
-        echo "native-image tool found!"
-        echo "Testing LLVM backend availability..."
-        $GRAALVM_HOME/bin/native-image --expert-options | grep -i backend || echo "Backend options found"
-    else
-        echo "native-image not found, checking alternative locations..."
-        find "$GRAALVM_HOME" -name "native-image" -type f || echo "native-image not found anywhere"
-    fi
+	echo "GraalVM directory exists"
+	ls -la "$GRAALVM_HOME/bin/" || echo "No bin directory yet"
+
+	# Check if we can find native-image
+	if [ -f "$GRAALVM_HOME/bin/native-image" ]; then
+		echo "native-image tool found!"
+		echo "Testing LLVM backend availability..."
+		$GRAALVM_HOME/bin/native-image --expert-options | grep -i backend || echo "Backend options found"
+	else
+		echo "native-image not found, checking alternative locations..."
+		find "$GRAALVM_HOME" -name "native-image" -type f || echo "native-image not found anywhere"
+	fi
 else
-    echo "GraalVM directory not created yet"
+	echo "GraalVM directory not created yet"
 fi
 
 cd $CUR_DIR

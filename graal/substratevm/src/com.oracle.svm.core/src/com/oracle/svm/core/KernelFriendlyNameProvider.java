@@ -161,9 +161,39 @@ public class KernelFriendlyNameProvider implements UniqueShortNameProvider {
         // Convert types to readable names without hashes
         String typeName = fullTypeName.replace('$', '_'); // Handle inner classes
 
-        // Handle array types first
+        // Handle array types first - use Array instead of [] to avoid C linker issues
         if (typeName.startsWith("[")) {
-            return "ArrayOf" + getReadableTypeName(typeName.substring(1));
+            String elementTypeName = typeName.substring(1);
+
+            // Handle JVM internal type descriptors for primitive arrays
+            switch (elementTypeName) {
+                case "Z":
+                    return "BoolArray";
+                case "B":
+                    return "ByteArray";
+                case "C":
+                    return "CharArray";
+                case "S":
+                    return "ShortArray";
+                case "I":
+                    return "IntArray";
+                case "J":
+                    return "LongArray";
+                case "F":
+                    return "FloatArray";
+                case "D":
+                    return "DoubleArray";
+                default:
+                    // For object arrays (starts with L) or nested arrays
+                    String elementType = getReadableTypeName(elementTypeName);
+                    return elementType + "Array";
+            }
+        }
+
+        // Handle array notation in type names (e.g., "char[]", "int[]")
+        if (typeName.endsWith("[]")) {
+            String baseType = typeName.substring(0, typeName.length() - 2);
+            return getReadableTypeName(baseType) + "Array";
         }
 
         // Map primitive types to readable names
@@ -186,7 +216,31 @@ public class KernelFriendlyNameProvider implements UniqueShortNameProvider {
                 return "Double";
             case "void":
                 return "Void";
+            // Handle JVM internal type descriptors
+            case "Z":
+                return "Bool";
+            case "B":
+                return "Byte";
+            case "C":
+                return "Char";
+            case "S":
+                return "Short";
+            case "I":
+                return "Int";
+            case "J":
+                return "Long";
+            case "F":
+                return "Float";
+            case "D":
+                return "Double";
+            case "V":
+                return "Void";
             default:
+                // Handle object types starting with L (JVM format)
+                if (typeName.startsWith("L") && typeName.endsWith(";")) {
+                    typeName = typeName.substring(1, typeName.length() - 1);
+                }
+
                 // For object types, remove package and use class name
                 int lastDot = typeName.lastIndexOf('.');
                 if (lastDot >= 0) {

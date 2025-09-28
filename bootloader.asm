@@ -98,7 +98,7 @@ boot:
 	jz .skip_entry
 .not_ACPI:
 	mov ecx, [di + 8]	# get lower uint32_t of memory region length
-	or ecx,  [di + 12]	# OR" it with upper uint32_t to test for zero
+	or ecx,  [di + 12]	# OR it with upper uint32_t to test for zero
 	jz .skip_entry		# if length uint64_t is 0, skip entry
 	inc bp			# else got a good entry, increment counter)
 	add di, 24		# and set pointer to next entry
@@ -169,7 +169,7 @@ boot:
 
 	lgdt [GDT_ptr]		#load GDT
 
-	ljmp KERNEL_CODE_SEG, 0x7E00	#jump to long mode
+	ljmp KERNEL_CODE_SEG, lmode	#jump to long mode
 
 	
 .no_CPUID:
@@ -222,9 +222,10 @@ lmode:
 	mov rsp, 0x200000
 	mov rbp, rsp		# initialize stack to top of kernel memory
 
-	# call init		# init()
+	# Test the kernel function call
 	call Kernel_startKernel_Long # call java main
 
+	# If we get here, the kernel returned successfully
 	cli
 	hlt
 

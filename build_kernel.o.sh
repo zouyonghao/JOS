@@ -23,6 +23,8 @@ $GRAALVM_HOME/bin/native-image \
 	-R:-InstallSegfaultHandler \
 	-H:-PreserveFramePointer \
 	-Dsvm.kernelFriendlyNames=true \
+	-H:LLVMPreserveFunctionsRegex=Kernel_.* \
+	-H:+ExitAfterCompilation \
 	-H:Name=java_kernel \
 	--no-fallback \
 	Kernel
@@ -31,35 +33,47 @@ $GRAALVM_HOME/bin/native-image \
 rm -f kernel Kernel.class java_kernel
 mkdir -p obj
 
-echo "Looking for startKernel function in generated LLVM files..."
+echo "Looking for ALL Kernel LLVM files in generated-llvm..."
 
 if [ -d "generated-llvm" ]; then
 	CLANG=$GRAALVM_HOME/lib/llvm/bin/clang
 
-	# Find the startKernel LLVM file - this is our main entry point
-	# writeMemory is a native method, so it's provided by runtime.c, not LLVM
-	STARTKERNEL_LL=$(find generated-llvm -name "*startKernel*" -name "*.ll" | head -1)
+	# Find ALL LLVM files that contain Kernel functions
+	KERNEL_LL_FILES=$(find generated-llvm -name "Kernel_*.ll" | sort)
 
-	if [ -n "$STARTKERNEL_LL" ]; then
-		echo "Found startKernel file: $(basename $STARTKERNEL_LL)"
-		echo "Note: writeMemory is a native method provided by runtime.c"
+	if [ -n "$KERNEL_LL_FILES" ]; then
+		echo "Found Kernel LLVM files:"
+		echo "$KERNEL_LL_FILES" | while read file; do echo "  - $(basename $file)"; done
 
-		# Simply compile the startKernel file - writeMemory will be linked from runtime.c
-		echo "Compiling startKernel LLVM IR to object file..."
-		if $CLANG "$STARTKERNEL_LL" -c -fno-omit-frame-pointer -o obj/Kernel.o; then
-			echo "✅ Successfully generated obj/Kernel.o from startKernel"
+		echo "Linking ALL Kernel LLVM files into single IR file..."
+		LLVM_LINK=$GRAALVM_HOME/lib/llvm/bin/llvm-link
 
-			# Show what we got
-			echo "Generated obj/Kernel.o contains:"
-			nm obj/Kernel.o 2>/dev/null | grep -E "startKernel|writeMemory" || echo "No matching symbols found"
+		# First link all LLVM IR files into one
+		if $LLVM_LINK $KERNEL_LL_FILES -o generated-llvm/kernel_combined.ll; then
+			echo "✅ Successfully linked all LLVM IR files"
+			echo "Compiling combined LLVM IR to object file..."
 
-			echo "Build complete! writeMemory will be resolved from runtime.c during linking."
+			llvm-dis generated-llvm/kernel_combined.ll -o generated-llvm/kernel_combined.ll.txt
+
+			# Now compile the combined IR file
+			if $CLANG generated-llvm/kernel_combined.ll -c -fno-omit-frame-pointer -o obj/Kernel.o; then
+				echo "✅ Successfully generated obj/Kernel.o from all Kernel functions"
+
+				# Show what we got
+				echo "Generated obj/Kernel.o contains these symbols:"
+				nm obj/Kernel.o 2>/dev/null | grep -E "^[0-9a-f]+ [TtWw] " | head -10
+
+				echo "Build complete! Native methods will be resolved from runtime.c during linking."
+			else
+				echo "❌ Failed to compile combined LLVM IR"
+				exit 1
+			fi
 		else
-			echo "❌ Failed to compile startKernel LLVM IR"
+			echo "❌ Failed to link LLVM IR files"
 			exit 1
 		fi
 	else
-		echo "❌ No startKernel LLVM IR file found"
+		echo "❌ No Kernel_*.ll LLVM IR files found"
 		echo "Available LLVM files:"
 		find generated-llvm -name "*.ll" | head -5
 		exit 1
