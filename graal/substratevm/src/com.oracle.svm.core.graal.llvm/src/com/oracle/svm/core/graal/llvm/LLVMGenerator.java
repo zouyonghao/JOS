@@ -478,6 +478,17 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         LLVMTypeRef actualType = uncompressedObject ? builder.objectType(true) : ((LLVMKind) kind.getPlatformKind()).get();
         LLVMValueRef value = emitLLVMConstant(actualType, (JavaConstant) constant);
         Value val = new LLVMConstant(value, constant);
+
+        // Special handling for string constants - return direct pointer to avoid compression
+        try {
+            String stringValue = constant.toValueString();
+            if (stringValue != null && !stringValue.isEmpty()) {
+                return val;
+            }
+        } catch (Exception e) {
+            // Fall through to normal object handling
+        }
+
         return uncompressedObject ? emitUncompress(val, ReferenceAccess.singleton().getCompressEncoding(), false) : val;
     }
 
@@ -510,6 +521,18 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
                 if (constant.isNull()) {
                     return builder.constantNull(builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
                 } else {
+                    // Special handling for string constants - create a proper object pointer
+                    try {
+                        String stringValue = constant.toValueString();
+                        if (stringValue != null && !stringValue.isEmpty()) {
+                            // Create a global string constant and cast it to object type
+                            LLVMValueRef stringPtr = builder.buildGlobalStringPtr(stringValue);
+                            // Cast the i8* to the expected object type
+                            return builder.buildBitcast(stringPtr, builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
+                        }
+                    } catch (Exception e) {
+                        // Fall through to normal object handling
+                    }
                     return builder.buildLoad(getLLVMPlaceholderForConstant(constant), builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
                 }
             default:
@@ -530,31 +553,6 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     private long nextConstantId = 0L;
 
     private LLVMValueRef getLLVMPlaceholderForConstant(Constant constant) {
-        // For string constants, generate them directly in LLVM IR instead of external symbols
-        if (constant instanceof JavaConstant) {
-            JavaConstant javaConstant = (JavaConstant) constant;
-            if (javaConstant.getJavaKind() == JavaKind.Object && !javaConstant.isNull()) {
-                // Try to extract string value if it's a string constant
-                try {
-                    String stringValue = javaConstant.toValueString();
-                    if (stringValue != null && !stringValue.isEmpty()) {
-                        // Check if we already have a symbol for this constant
-                        String symbolName = constants.get(constant);
-                        if (symbolName == null) {
-                            symbolName = "constant_" + functionName + "_" + nextConstantId++;
-                            constants.put(constant, symbolName);
-                        }
-
-                        // Create a global string constant directly in LLVM IR
-                        LLVMValueRef stringPtr = builder.buildGlobalStringPtr(stringValue);
-                        return stringPtr;
-                    }
-                } catch (Exception e) {
-                    // Fall through to original logic if string extraction fails
-                }
-            }
-        }
-        
         // Original logic for non-string constants
         String symbolName = constants.get(constant);
         boolean uncompressedObject = isUncompressedObjectConstant(constant);
