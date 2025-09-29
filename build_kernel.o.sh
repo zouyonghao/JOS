@@ -18,16 +18,17 @@ $GRAALVM_HOME/bin/native-image \
 	-H:+UnlockExperimentalVMOptions \
 	-H:CompilerBackend=llvm \
 	-H:TempDirectory=generated-llvm \
-	-H:+BitcodeOptimizations \
 	-R:StackSize=0 \
-	-R:-InstallSegfaultHandler \
-	-H:-PreserveFramePointer \
 	-Dsvm.kernelFriendlyNames=true \
 	-H:LLVMPreserveFunctionsRegex=Kernel_.* \
 	-H:+ExitAfterCompilation \
 	-H:Name=java_kernel \
 	--no-fallback \
 	Kernel
+
+# -H:+BitcodeOptimizations \
+# -R:-InstallSegfaultHandler \
+# -H:-PreserveFramePointer \
 
 # Clean up generated files
 rm -f kernel Kernel.class java_kernel
@@ -51,12 +52,23 @@ if [ -d "generated-llvm" ]; then
 		# First link all LLVM IR files into one
 		if $LLVM_LINK $KERNEL_LL_FILES -o generated-llvm/kernel_combined.ll; then
 			echo "✅ Successfully linked all LLVM IR files"
+
+			# Optimize to merge duplicate constants
+			echo "Optimizing LLVM IR to merge duplicate constants..."
+			if opt -passes=constmerge generated-llvm/kernel_combined.ll -o generated-llvm/kernel_optimized.ll; then
+				echo "✅ Successfully optimized LLVM IR with constmerge"
+				# Use the optimized version for compilation
+				cp generated-llvm/kernel_optimized.ll generated-llvm/kernel_combined.ll
+			else
+				echo "⚠️  Optimization failed, using unoptimized IR"
+			fi
+
 			echo "Compiling combined LLVM IR to object file..."
 
 			llvm-dis generated-llvm/kernel_combined.ll -o generated-llvm/kernel_combined.ll.txt
 
-			# Now compile the combined IR file
-			if $CLANG generated-llvm/kernel_combined.ll -c -fno-omit-frame-pointer -o obj/Kernel.o; then
+			# Now compile the combined IR file with aggressive anti-optimization flags
+			if $CLANG generated-llvm/kernel_combined.ll -c -O0 -fno-omit-frame-pointer -fno-inline -fno-optimize-sibling-calls -fno-builtin -fno-merge-constants -fno-constant-cfstrings -disable-llvm-passes -o obj/Kernel.o; then
 				echo "✅ Successfully generated obj/Kernel.o from all Kernel functions"
 
 				# Show what we got

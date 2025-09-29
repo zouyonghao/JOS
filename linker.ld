@@ -9,7 +9,9 @@ SECTIONS {
     }
     .rodata :
     {
+        __rodata_start = .;
         *(.rodata)
+        __rodata_end = .;
     }
     .data :
     {
