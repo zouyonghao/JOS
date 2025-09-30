@@ -9,7 +9,7 @@ ASFLAGS = -msyntax=intel -mnaked-reg
 LINKER = linker.ld
 LDFLAGS= -lgcc -nostdlib
 # NOTE: in some installs you need to specify the path of the library files
-#LDFLAGS += -L/lib/gcc/x86_64-elf/11.2.0/libgcc.a 
+#LDFLAGS += -L/lib/gcc/x86_64-elf/11.2.0/libgcc.a
 
 # ALT-2, then type quit
 QEMUCMD = qemu-system-x86_64
@@ -38,13 +38,14 @@ $(OBJDIR)/runtime.o: runtime.c
 $(OBJDIR)/bootloader.o : bootloader.asm $(OBJDIR)
 	$(AS) bootloader.asm -o $(OBJDIR)/bootloader.o $(ASFLAGS)
 
-$(BUILDDIR) : 
-	test ! -d $(BUILDDIR) && mkdir $(BUILDDIR) 
+$(BUILDDIR) :
+	test ! -d $(BUILDDIR) && mkdir $(BUILDDIR)
 
 $(OBJDIR) :
-	test ! -d $(OBJDIR) && mkdir $(OBJDIR) 
+	test ! -d $(OBJDIR) && mkdir $(OBJDIR)
 
 clean :
 	rm -rf generated-llvm
 	rm -rf $(OBJLIST)
 	rm -f $(BUILDDIR)/BB.bin
+	rm -f svm_err*.md

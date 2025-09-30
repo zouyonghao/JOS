@@ -19,6 +19,7 @@ $GRAALVM_HOME/bin/native-image \
 	-H:CompilerBackend=llvm \
 	-H:TempDirectory=generated-llvm \
 	-R:StackSize=0 \
+	-H:-SpawnIsolates \
 	-Dsvm.kernelFriendlyNames=true \
 	-H:LLVMPreserveFunctionsRegex=Kernel_.* \
 	-H:+ExitAfterCompilation \
