@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.BytePointer;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.Pointer;
@@ -92,6 +93,10 @@ public class LLVMIRBuilder implements AutoCloseable {
     }
 
     /* Module */
+
+    public LLVMModuleRef getModule() {
+        return module;
+    }
 
     public byte[] getBitcode() {
         final byte[] bitcode;
@@ -178,6 +183,7 @@ public class LLVMIRBuilder implements AutoCloseable {
 
     public enum LinkageType {
         External(LLVM.LLVMExternalLinkage),
+        Internal(LLVM.LLVMInternalLinkage),
         LinkOnce(LLVM.LLVMLinkOnceAnyLinkage),
         LinkOnceODR(LLVM.LLVMLinkOnceODRLinkage);
 
@@ -399,7 +405,8 @@ public class LLVMIRBuilder implements AutoCloseable {
 
     private static int pointerAddressSpace(boolean tracked, boolean compressed) {
         assert tracked || !compressed;
-        return tracked ? (compressed ? COMPRESSED_POINTER_ADDRESS_SPACE : TRACKED_POINTER_ADDRESS_SPACE) : UNTRACKED_POINTER_ADDRESS_SPACE;
+        // For kernel builds, don't use a separate address space for compressed pointers
+        return tracked ? TRACKED_POINTER_ADDRESS_SPACE : UNTRACKED_POINTER_ADDRESS_SPACE;
     }
 
     public LLVMTypeRef objectType(boolean compressed) {
@@ -426,7 +433,7 @@ public class LLVMIRBuilder implements AutoCloseable {
         return isPointerType(type) && isTrackedPointerType(type);
     }
 
-    static boolean isPointerType(LLVMTypeRef type) {
+    public static boolean isPointerType(LLVMTypeRef type) {
         return LLVM.LLVMGetTypeKind(type) == LLVM.LLVMPointerTypeKind;
     }
 
@@ -659,6 +666,11 @@ public class LLVMIRBuilder implements AutoCloseable {
      * functions, and are then conflated by the LLVM linker.
      */
     public LLVMValueRef getExternalObject(String name, boolean compressed) {
+        // DEBUG: Check if we're trying to create AS 1 constants in kernel builds
+        if (name != null && name.startsWith("constant_")) {
+            System.out.println("DEBUG getExternalObject called for: " + name);
+        }
+
         LLVMValueRef val = getGlobal(name);
         if (val == null) {
             val = LLVM.LLVMAddGlobalInAddressSpace(module, objectType(compressed), name, pointerAddressSpace(true, false));
@@ -668,6 +680,11 @@ public class LLVMIRBuilder implements AutoCloseable {
     }
 
     public LLVMValueRef getExternalSymbol(String name) {
+        // DEBUG: Check if we're creating AS 0 constants
+        if (name != null && name.startsWith("constant_")) {
+            System.out.println("DEBUG getExternalSymbol called for: " + name);
+        }
+
         LLVMValueRef val = getGlobal(name);
         if (val == null) {
             val = LLVM.LLVMAddGlobalInAddressSpace(module, rawPointerType(), name, UNTRACKED_POINTER_ADDRESS_SPACE);
@@ -690,6 +707,10 @@ public class LLVMIRBuilder implements AutoCloseable {
 
     private LLVMValueRef getGlobal(String name) {
         return LLVM.LLVMGetNamedGlobal(module, name);
+    }
+
+    public LLVMValueRef getNamedGlobal(String name) {
+        return getGlobal(name);
     }
 
     public void setInitializer(LLVMValueRef global, LLVMValueRef value) {
