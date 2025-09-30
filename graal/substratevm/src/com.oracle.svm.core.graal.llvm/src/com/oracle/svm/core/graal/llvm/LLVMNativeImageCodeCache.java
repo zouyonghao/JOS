@@ -506,6 +506,17 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         return globalSymbols;
     }
 
+    @Override
+    protected void encodeMethod(com.oracle.svm.core.code.CodeInfoEncoder codeInfoEncoder, Pair<HostedMethod, CompilationResult> pair) {
+        // When using -H:+ExitAfterCompilation, we exit before linkCompiledBatches assigns code offsets.
+        // Skip encoding methods that don't have valid code offsets (e.g., invalidCodeAddressHandler).
+        final HostedMethod method = pair.getLeft();
+        if (!method.isCodeAddressOffsetValid()) {
+            return;
+        }
+        super.encodeMethod(codeInfoEncoder, pair);
+    }
+
     private StackMapDumper getStackMapDumper(boolean enable) {
         if (enable) {
             return new EnabledStackMapDumper();

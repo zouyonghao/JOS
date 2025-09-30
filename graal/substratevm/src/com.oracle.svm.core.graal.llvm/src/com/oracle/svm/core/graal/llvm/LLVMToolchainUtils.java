@@ -84,7 +84,8 @@ public class LLVMToolchainUtils {
 
     public static void llvmCompile(DebugContext debug, String outputPath, String inputPath, Path basePath, Function<String, String> outputPathFormat) {
         List<String> args = new ArrayList<>();
-        args.add("-relocation-model=pic");
+        args.add("-relocation-model=static");
+        args.add("-code-model=small");
         /*
          * Makes sure that unreachable instructions get emitted into the machine code. This prevents
          * a situation where a call is the last instruction of a function, resulting in its return
@@ -93,6 +94,8 @@ public class LLVMToolchainUtils {
          */
         args.add("--trap-unreachable");
         args.add("-march=" + LLVMTargetSpecific.get().getLLVMArchName());
+        // Reserve R15 for bare-metal kernel's thread-local storage pointer
+        args.add("-mattr=+reserve-r15");
         args.addAll(LLVMTargetSpecific.get().getLLCAdditionalOptions());
         args.add("-O" + optimizationLevel());
         args.add("-filetype=obj");
