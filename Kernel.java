@@ -104,8 +104,10 @@ public class Kernel {
 
         writeString("Hello, Worldaaa!", 0, 1);
 
-        // initConsole();
-        // demoOutput();
+        // Infinite loop to keep kernel running
+        while (true) {
+            // Do nothing, just keep the processor busy
+        }
     }
 
     public static void main(String[] args) {
