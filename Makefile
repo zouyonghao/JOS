@@ -30,7 +30,7 @@ $(OBJDIR)/Kernel.o: Kernel.java
 
 $(OBJDIR)/runtime.o: runtime.c
 	. ./use_graalvm.sh ; \
-	$${GRAALVM_HOME}/lib/llvm/bin/clang -c runtime.c -o obj/runtime.o
+	$${GRAALVM_HOME}/lib/llvm/bin/clang -c runtime.c -o obj/runtime.o -fno-pic
 
 # $(OBJDIR)/vga.o : vga.c $(OBJDIR)
 # 				$(CC) -c vga.c -o $(OBJDIR)/vga.o $(CFLAGS) $(OPTFLAGS) $(DIRECTIVES)

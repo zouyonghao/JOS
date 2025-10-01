@@ -66,10 +66,13 @@ if [ -d "generated-llvm" ]; then
 
 			echo "Compiling combined LLVM IR to object file..."
 
+			# Dump for debugging
 			llvm-dis generated-llvm/kernel_combined.ll -o generated-llvm/kernel_combined.ll.txt
 
 			# Now compile the combined IR file with aggressive anti-optimization flags
-			if $CLANG generated-llvm/kernel_combined.ll -c -O0 -fno-omit-frame-pointer -fno-inline -fno-optimize-sibling-calls -fno-builtin -fno-merge-constants -fno-constant-cfstrings -disable-llvm-passes -o obj/Kernel.o; then
+			# IMPORTANT: -fno-pic to disable position-independent code (no GOT)
+			# IMPORTANT: -mcmodel=small for absolute addressing in flat binary
+			if $CLANG generated-llvm/kernel_combined.ll -c -O0 -fno-pic -mcmodel=small -fno-omit-frame-pointer -fno-inline -fno-optimize-sibling-calls -fno-builtin -fno-merge-constants -fno-constant-cfstrings -disable-llvm-passes -o obj/Kernel.o; then
 				echo "✅ Successfully generated obj/Kernel.o from all Kernel functions"
 
 				# Show what we got

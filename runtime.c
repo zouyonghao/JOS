@@ -14,17 +14,49 @@ void Kernel_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
 // REQUIRED: String support
 // =============================================================================
 
-// GraalVM generates string constants as internal globals in the LLVM IR.
-// These constants are passed to Java code as direct pointers to null-terminated
-// C strings. We just need this simple charAt implementation to read them.
+// GraalVM String object layout (simplified for bare-metal):
+// Offset 0-7:   Object header (ignored in bare-metal)
+// Offset 8:     Pointer to value (char array object)
+// Offset 16-19: hash field
+// Offset 20:    coder field (0 = Latin1, 1 = UTF16)
+//
+// Char array object layout:
+// Offset 0-11:  Object header
+// Offset 12:    Length field
+// Offset 16+:   Actual character data
 
+struct string_value_object {
+    char header[12];        // Offsets 0-11: object header
+    int32_t length;         // Offset 12: array length
+    char pad[4];            // Padding to offset 16
+    char data[];            // Offset 16+: actual string data
+} __attribute__((packed));
+
+struct string_object {
+    char header[8];                         // Offset 0-7: object header
+    struct string_value_object *value;      // Offset 8: pointer to value
+    char pad[4];                            // Offset 16-19: hash
+    int8_t coder;                           // Offset 20: coder field
+    char pad2[3];                           // Padding
+} __attribute__((packed));
+
+// charAt implementation: reads from GraalVM String object
 uint32_t java_lang_String_charAt_Int_retChar(void *string_obj, int32_t index) {
   if (string_obj == 0 || index < 0) {
     return 0;
   }
 
-  const char *str = (const char *)string_obj;
-  return (uint32_t)(unsigned char)str[index];
+  struct string_object *str = (struct string_object *)string_obj;
+  if (str->value == 0) {
+    return 0;
+  }
+
+  if (index >= str->value->length) {
+    return 0;
+  }
+
+  // Data starts at offset 16 in the value object
+  return (uint32_t)(unsigned char)str->value->data[index];
 }
 
 // =============================================================================
@@ -64,10 +96,50 @@ void com_oracle_svm_core_thread_SafepointSlowpath_enterSlowPathSafepointCheck_V(
   // No-op - safepoints not needed in bare-metal
 }
 
-// Helper to convert untracked pointer to tracked object pointer.
-// In bare-metal without GC, just return the same pointer.
-void *__llvm_load_object_from_untracked_pointer(const char *ptr) {
-  return (void *)ptr;
+// Helper to convert untracked pointer (C string) to tracked String object pointer.
+// We need to wrap C strings in GraalVM String object structures.
+void *__llvm_load_object_from_untracked_pointer(const char *c_str) {
+  if (c_str == 0) {
+    return 0;
+  }
+
+  // Calculate string length
+  int len = 0;
+  while (c_str[len] != '\0') {
+    len++;
+  }
+
+  // Allocate space for value object + string data
+  // We'll use a simple static buffer approach for now
+  static char buffer[4096];
+  static int buffer_offset = 0;
+
+  // Allocate value object
+  struct string_value_object *value = (struct string_value_object *)(buffer + buffer_offset);
+  buffer_offset += sizeof(struct string_value_object) + len;
+
+  // Initialize value object
+  for (int i = 0; i < 12; i++) value->header[i] = 0;
+  value->length = len;
+  for (int i = 0; i < 4; i++) value->pad[i] = 0;
+
+  // Copy string data
+  for (int i = 0; i < len; i++) {
+    value->data[i] = c_str[i];
+  }
+
+  // Allocate String object
+  struct string_object *str = (struct string_object *)(buffer + buffer_offset);
+  buffer_offset += sizeof(struct string_object);
+
+  // Initialize String object
+  for (int i = 0; i < 8; i++) str->header[i] = 0;
+  str->value = value;
+  for (int i = 0; i < 4; i++) str->pad[i] = 0;
+  str->coder = 0;  // Latin1
+  for (int i = 0; i < 3; i++) str->pad2[i] = 0;
+
+  return (void *)str;
 }
 
 // Exception handling personality function - not needed in bare-metal
@@ -75,4 +147,12 @@ int com_oracle_svm_core_code_IsolateEnterStub_LLVMExceptionUnwind_personality_Yl
     int a, int b, int64_t c, int64_t d, int64_t e) {
   (void)a; (void)b; (void)c; (void)d; (void)e;
   return 0;
+}
+
+// Null pointer exception - called by writeString when checking null
+void com_oracle_svm_core_snippets_ImplicitExceptions_throwNewNullPointerException_V() {
+  // In bare-metal, we can't throw exceptions. Just halt.
+  while (1) {
+    // Infinite loop on null pointer
+  }
 }
