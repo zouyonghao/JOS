@@ -9,6 +9,11 @@ public class Kernel {
     private static int cursorX = 0;
     private static int cursorY = 0;
 
+    // Test global arrays
+    private static int[] testIntArray = new int[10];
+    private static String[] testStringArray = new String[5];
+    private static char[] testCharArray = new char[20];
+
     private static int index(int x, int y) {
         return y * SCREEN_WIDTH + x;
     }
@@ -92,7 +97,35 @@ public class Kernel {
 
         writeString("Kernel initialized successfully.\n");
         writeString("System ready.\n");
-        writeString("a very long stringgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg");
+        writeString("\n");
+
+        // Test 4: Global arrays
+        writeString("Test 4: Global arrays\n");
+
+        // Test int array
+        testIntArray[0] = 42;
+        testIntArray[1] = 100;
+        testIntArray[2] = testIntArray[0] + testIntArray[1];
+        writeString("Int array: assigned values\n");
+
+        // Test String array
+        testStringArray[0] = "Hello";
+        testStringArray[1] = "World";
+        writeString("String array[0]: ");
+        writeString(testStringArray[0]);
+        writeString("\n");
+        writeString("String array[1]: ");
+        writeString(testStringArray[1]);
+        writeString("\n");
+
+        // Test char array
+        testCharArray[0] = 'A';
+        testCharArray[1] = 'B';
+        testCharArray[2] = 'C';
+        writeString("Char array: assigned ABC\n");
+
+        writeString("\n");
+        writeString("All tests completed!\n");
 
         // Infinite loop to keep kernel running
         while (true) {

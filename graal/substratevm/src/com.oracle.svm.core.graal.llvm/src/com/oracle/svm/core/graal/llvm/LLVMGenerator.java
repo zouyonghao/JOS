@@ -611,9 +611,9 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
     /**
      * Ensures a global static class data structure exists for holding mutable static fields.
-     * For kernel builds, we emit these as zero-initialized byte arrays in AS 1.
-     * The first 8 bytes will contain a self-pointer (to offset +8) initialized by runtime.c.
-     * The actual object data starts at offset 8.
+     * For kernel builds, we emit these as byte arrays in AS 1 with a self-pointer at offset 0.
+     * The first 8 bytes contain a pointer to offset +8 (the actual object data).
+     * This allows the code to load the pointer and access the object fields.
      */
     private void ensureStaticClassDataGlobalExists(String symbolName, int size) {
         // Check if already exists
@@ -623,25 +623,50 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
         System.out.println("DEBUG ensureStaticClassDataGlobalExists: Creating " + symbolName + " with size " + size);
 
-        // Create a byte array in AS 1 (managed address space)
-        // Size includes the 8-byte self-pointer header
-        LLVMTypeRef arrayType = LLVM.LLVMArrayType(builder.byteType(), size);
+        // For arrays and objects, create a structure: { ptr, data }
+        // Offset 0-7: Self-pointer to offset 8
+        // Offset 8+: Object data (header + fields/elements)
 
-        // Create global in AS 1 (managed/tracked) for GC compatibility
+        // Create the data portion (size - 8 bytes)
+        LLVMTypeRef dataType = LLVM.LLVMArrayType(builder.byteType(), size - 8);
+
+        // Create structure: { i8*, [size-8 x i8] }
+        LLVMTypeRef structType = builder.structType(
+            LLVM.LLVMPointerType(builder.byteType(), 1),  // AS 1 pointer
+            dataType
+        );
+
+        // Create global with this struct type
         LLVMValueRef global = LLVM.LLVMAddGlobalInAddressSpace(
             builder.getModule(),
-            arrayType,
+            structType,
             symbolName,
             1  // Address space 1 (managed)
         );
 
-        // Zero-initialize (the first 8 bytes will be set by __llvm_init_static_class_data in runtime.c)
-        builder.setInitializer(global, LLVM.LLVMConstNull(arrayType));
+        // Initialize: { getelementptr to field 1, zeroinitializer }
+        // Use InBounds GEP: indices are [0, 1] to get second field of struct
+        LLVMValueRef[] gepIndices = new LLVMValueRef[]{
+            builder.constantInt(0),  // Index into global
+            builder.constantInt(1)   // Index into struct (field 1)
+        };
+        LLVMValueRef selfPtr = LLVM.LLVMConstInBoundsGEP(global, new PointerPointer<>(gepIndices), 2);
+
+        LLVMValueRef initializer = LLVM.LLVMConstNamedStruct(
+            structType,
+            new PointerPointer<>(new LLVMValueRef[]{
+                selfPtr,  // Pointer to the data portion
+                LLVM.LLVMConstNull(dataType)  // Zero-initialized data
+            }),
+            2
+        );
+
+        builder.setInitializer(global, initializer);
 
         // Use Internal linkage to avoid GOT relocations
         LLVMIRBuilder.setLinkage(global, LinkageType.Internal);
 
-        System.out.println("DEBUG ensureStaticClassDataGlobalExists: Created " + symbolName + " as byte array with self-pointer header");
+        System.out.println("DEBUG ensureStaticClassDataGlobalExists: Created " + symbolName + " with self-pointer");
     }
 
     @Override
