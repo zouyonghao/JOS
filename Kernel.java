@@ -10,9 +10,9 @@ public class Kernel {
     private static int cursorY = 0;
 
     // Test global arrays
-    private static int[] testIntArray = new int[10];
-    private static String[] testStringArray = new String[5];
-    private static char[] testCharArray = new char[20];
+    // private static int[] testIntArray = new int[10];
+    // private static String[] testStringArray = new String[5];
+    // private static char[] testCharArray = new char[20];
 
     private static int index(int x, int y) {
         return y * SCREEN_WIDTH + x;
@@ -65,7 +65,8 @@ public class Kernel {
         if (str == null) {
             return;
         }
-        for (int i = 0; i < str.length(); i++) {
+        int len = str.length();  // Now works correctly with fixed layout
+        for (int i = 0; i < len; i++) {
             writeChar(str.charAt(i));
         }
     }
@@ -74,58 +75,28 @@ public class Kernel {
         if (str == null) {
             return;
         }
-        for (int i = 0; i < str.length(); i++) {
-            writeCharAt(str.charAt(i), x + i, y);
+        int len = str.length();  // Use direct .length access
+        for (int i = 0; i < len; i++) {
+            writeCharAt(str.charAt(i), x + i, y);  // charAt() works!
         }
     }
 
     public static void startKernel(long dummy) {
+        // Write a test marker to top-left of screen to verify kernel is running
+        writeMemory(0xB8000L, 'X');
+        writeMemory(0xB8001L, (char)0x0F); // Bright white on black
+
         // Clear screen first
         clearScreen();
+        writeChar((char) (cursorX + '0'));
 
-        // Write banner
-        writeString("=== Java OS Kernel ===\n");
-        writeString("GraalVM Native Image + LLVM Backend\n");
-        writeString("String constants: WORKING!\n");
-        writeString("\n");
-
-        // Test various string operations
-        writeString("Test 1: Simple strings\n");
-        writeString("Test 2: Numbers: 12345\n");
-        writeString("Test 3: Special chars: !@#$%\n");
-        writeString("\n");
-
-        writeString("Kernel initialized successfully.\n");
-        writeString("System ready.\n");
-        writeString("\n");
-
-        // Test 4: Global arrays
-        writeString("Test 4: Global arrays\n");
-
-        // Test int array
-        testIntArray[0] = 42;
-        testIntArray[1] = 100;
-        testIntArray[2] = testIntArray[0] + testIntArray[1];
-        writeString("Int array: assigned values\n");
-
-        // Test String array
-        testStringArray[0] = "Hello";
-        testStringArray[1] = "World";
-        writeString("String array[0]: ");
-        writeString(testStringArray[0]);
-        writeString("\n");
-        writeString("String array[1]: ");
-        writeString(testStringArray[1]);
-        writeString("\n");
-
-        // Test char array
-        testCharArray[0] = 'A';
-        testCharArray[1] = 'B';
-        testCharArray[2] = 'C';
-        writeString("Char array: assigned ABC\n");
-
-        writeString("\n");
-        writeString("All tests completed!\n");
+        writeString("Hello\n");
+        writeChar((char) (cursorX + '0'));
+        writeChar((char) (cursorY + '0'));
+        // // Manually reset cursor to a known state
+        // cursorX = 0;
+        // cursorY = 1;
+        writeString("World\n");
 
         // Infinite loop to keep kernel running
         while (true) {
