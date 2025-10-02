@@ -89,6 +89,8 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapInstance;
+import com.oracle.graal.pointsto.heap.ImageHeapPrimitiveArray;
+import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.PointerPointer;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
@@ -151,6 +153,7 @@ import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.PlatformKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.ValueKind;
 
@@ -487,7 +490,8 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
     @Override
     public Value emitConstant(LIRKind kind, Constant constant) {
-        // System.out.println("DEBUG: emitConstant called with kind: " + kind + ", constant: " + constant);
+        // System.out.println("DEBUG: emitConstant called with kind: " + kind + ",
+        // constant: " + constant);
         boolean uncompressedObject = isUncompressedObjectKind(kind);
         LLVMTypeRef actualType = uncompressedObject ? builder.objectType(true)
                 : ((LLVMKind) kind.getPlatformKind()).get();
@@ -506,7 +510,8 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     }
 
     LLVMValueRef emitLLVMConstant(LLVMTypeRef type, JavaConstant constant) {
-        // System.out.println("DEBUG: emitLLVMConstant called with type: " + getJavaKind(type) + ", constant: " + constant);
+        // System.out.println("DEBUG: emitLLVMConstant called with type: " +
+        // getJavaKind(type) + ", constant: " + constant);
         switch (getJavaKind(type)) {
             case Boolean:
                 return builder.constantBoolean(constant.asBoolean());
@@ -528,58 +533,12 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
                 if (constant.isNull()) {
                     return builder.constantNull(builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
                 } else {
-                    // For kernel builds, check if this is a heap object constant
-                    // For kernel builds without isolates, ALL object constants need helper function
-                    boolean isObjectConstant = false;
-                    if (constant instanceof ImageHeapInstance) {
-                        ImageHeapInstance heapInstance = (ImageHeapInstance) constant;
-                        AnalysisType constantType = heapInstance.getType();
-                        if (constantType != null && "Ljava/lang/String;".equals(constantType.getName())) {
-                            String stringValue = constant.toValueString();
-                            if (stringValue != null && !stringValue.isEmpty()) {
-                                // Register this string to be emitted as a global
-                                ensureStringGlobalExists(stringValue);
-                                isObjectConstant = true;
-                            }
-                        } else if (constantType != null) {
-                            // For other heap objects (like type metadata arrays), mark as object constant
-                            // These will use the constant_* globals from runtime.c
-                            isObjectConstant = true;
-                        }
-                    }
-
-                    // Check if this is a static class data structure (constant_Kernel_*)
-                    String symbolName = constants.get(constant);
-                    boolean isStaticClassData = symbolName != null && symbolName.startsWith("constant_Kernel");
-
+                    // For all non-null object constants, just load from external reference
+                    // Don't try to create complex Java String object structures - that causes LLVM
+                    // crashes
                     LLVMValueRef placeholder = getLLVMPlaceholderForConstant(constant);
-
-                    // For static class data, the global IS the object data itself (byte array)
-                    // We need to return ptr addrspace(1) i8 pointing to first element of the array
-                    // Use runtime GEP to avoid constant expression crashes
-                    if (isStaticClassData) {
-                        System.out.println("DEBUG emitLLVMConstant: Using runtime GEP for static class data " + symbolName);
-                        LLVMValueRef zero = builder.constantInt(0);
-                        LLVMValueRef gep = builder.buildGEP(placeholder, zero, zero);
-                        System.out.println("DEBUG emitLLVMConstant: Created runtime GEP for " + symbolName);
-                        return gep;
-                    }
-
-                    // For object constants, call inline helper that does address space cast
-                    // The helper is marked alwaysinline and optimizes to a single addrspacecast
-                    // This is as efficient as C/C++ would be for kernel without GOT
-                    if (isObjectConstant) {
-                        boolean compressed = LLVMIRBuilder.isCompressedPointerType(type);
-                        LLVMTypeRef returnType = builder.objectType(compressed);
-                        LLVMTypeRef funcType = builder.functionType(returnType, builder.rawPointerType());
-                        LLVMValueRef helperFunc = builder.getFunction("__llvm_load_object_from_untracked_pointer", funcType);
-                        LLVMValueRef i8Ptr = builder.buildBitcast(placeholder, builder.rawPointerType());
-                        return builder.buildCall(helperFunc, i8Ptr);
-                    } else {
-                        // For non-object constants, load as before
-                        return builder.buildLoad(placeholder,
-                                builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
-                    }
+                    return builder.buildLoad(placeholder,
+                            builder.objectType(LLVMIRBuilder.isCompressedPointerType(type)));
                 }
             default:
                 throw shouldNotReachHere(dumpTypes("unsupported constant type", type)); // ExcludeFromJacocoGeneratedReport
@@ -588,34 +547,135 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
     /**
      * Ensures a global string constant exists in the module.
-     * For kernel builds, we emit string globals at module level to avoid constant expression issues.
+     * For kernel builds, we emit proper Java String object structures with:
+     * - Offset 0: Hub pointer (points to string data for simplicity)
+     * - Offset 8: Pointer to byte array (value field)
+     * - Offset 20: Coder byte (0 for LATIN1)
+     * The byte array has:
+     * - Offset 0: Hub pointer
+     * - Offset 12: Length (int)
+     * - Offset 16: Character data
      */
     private void ensureStringGlobalExists(String stringValue) {
         String globalName = "kernel_string_" + Math.abs(stringValue.hashCode());
+        String arrayName = globalName + "_array";
 
         // Check if already exists
         if (builder.getNamedGlobal(globalName) != null) {
             return;
         }
 
-        // Create LLVM constant string
-        LLVMValueRef stringConst = builder.constantString(stringValue);
-        LLVMTypeRef stringType = LLVM.LLVMTypeOf(stringConst);
+        int strLen = stringValue.length();
 
-        // Create global in AS 0 (untracked) - string constants must be in AS 0
-        // Use Internal linkage to avoid GOT relocations in bare-metal builds
-        LLVMValueRef global = LLVM.LLVMAddGlobal(builder.getModule(), stringType, globalName);
-        builder.setInitializer(global, stringConst);
-        LLVMIRBuilder.setLinkage(global, LinkageType.Internal);
+        // Create byte array structure: [hub_ptr (8 bytes), padding (4 bytes), length (4
+        // bytes), data]
+        // Total size: 8 + 4 + 4 + strLen = 16 + strLen bytes
+        byte[] arrayData = new byte[16 + strLen];
+
+        // Leave hub pointer at offset 0-7 as zeros (will be filled with self-pointer)
+        // Leave padding at offset 8-11 as zeros
+        // Set length at offset 12-15
+        arrayData[12] = (byte) (strLen & 0xFF);
+        arrayData[13] = (byte) ((strLen >> 8) & 0xFF);
+        arrayData[14] = (byte) ((strLen >> 16) & 0xFF);
+        arrayData[15] = (byte) ((strLen >> 24) & 0xFF);
+
+        // Copy string bytes at offset 16
+        for (int i = 0; i < strLen; i++) {
+            arrayData[16 + i] = (byte) stringValue.charAt(i);
+        }
+
+        // Create array type: [16 + strLen x i8]
+        LLVMTypeRef byteType = builder.byteType();
+        LLVMTypeRef arrayType = LLVM.LLVMArrayType(byteType, 16 + strLen);
+
+        // Create array global in AS 1
+        LLVMValueRef arrayGlobal = LLVM.LLVMAddGlobalInAddressSpace(
+                builder.getModule(), arrayType, arrayName, 1);
+
+        // Create constant array initializer
+        LLVMValueRef[] arrayElements = new LLVMValueRef[16 + strLen];
+        for (int i = 0; i < arrayData.length; i++) {
+            arrayElements[i] = builder.constantByte(arrayData[i]);
+        }
+        LLVMValueRef arrayInit = LLVM.LLVMConstArray(byteType,
+                new PointerPointer<>(arrayElements), arrayElements.length);
+
+        builder.setInitializer(arrayGlobal, arrayInit);
+        LLVMIRBuilder.setLinkage(arrayGlobal, LinkageType.Internal);
+
+        // Now create the String object structure:
+        // [hub_ptr (8 bytes), array_ptr (8 bytes), padding (4 bytes), coder (1 byte),
+        // padding (3 bytes)]
+        // Total: 24 bytes
+        // For the array pointer, just use builder.objectType() which creates proper
+        // tracked pointer
+        LLVMTypeRef arrayPtrType = builder.objectType(false); // AS 1 pointer (tracked, not compressed)
+        LLVMTypeRef paddingArrayType = LLVM.LLVMArrayType(byteType, 3);
+
+        LLVMTypeRef stringStructType = LLVM.LLVMStructType(new PointerPointer<>(new LLVMTypeRef[] {
+                builder.rawPointerType(), // hub pointer (offset 0)
+                arrayPtrType, // array pointer (offset 8) in AS 1
+                builder.intType(), // padding (offset 16)
+                byteType, // coder (offset 20)
+                paddingArrayType // padding to align (offset 21-23)
+        }), 5, 0);
+
+        // Create String global in AS 1
+        LLVMValueRef stringGlobal = LLVM.LLVMAddGlobalInAddressSpace(
+                builder.getModule(), stringStructType, globalName, 1);
+
+        // Create initializer
+        // Hub pointer: point to the array for simplicity (non-null pointer)
+        LLVMValueRef hubPtr = LLVM.LLVMConstBitCast(arrayGlobal, builder.rawPointerType());
+
+        // Array pointer: cast array global to correct AS 1 pointer type
+        LLVMValueRef arrayPtr = LLVM.LLVMConstBitCast(arrayGlobal, arrayPtrType);
+
+        // Coder: 0 for LATIN1
+        LLVMValueRef coder = builder.constantByte((byte) 0);
+
+        // Padding arrays
+        LLVMValueRef padding1 = builder.constantInt(0);
+        LLVMValueRef[] paddingBytes = { builder.constantByte((byte) 0),
+                builder.constantByte((byte) 0),
+                builder.constantByte((byte) 0) };
+        LLVMValueRef padding2 = LLVM.LLVMConstArray(byteType,
+                new PointerPointer<>(paddingBytes), 3);
+
+        LLVMValueRef stringInit = LLVM.LLVMConstNamedStruct(stringStructType,
+                new PointerPointer<>(new LLVMValueRef[] { hubPtr, arrayPtr, padding1, coder, padding2 }), 5);
+
+        builder.setInitializer(stringGlobal, stringInit);
+        LLVMIRBuilder.setLinkage(stringGlobal, LinkageType.Internal);
+
+        System.out.println("DEBUG: Created Java String object '" + globalName + "' with byte array '" + arrayName
+                + "' (length=" + strLen + ")");
     }
 
     /**
-     * Ensures a global static class data structure exists for holding mutable static fields.
-     * For kernel builds, we emit these as byte arrays in AS 1 with a self-pointer at offset 0.
+     * Ensures a global static class data structure exists for holding mutable
+     * static fields.
+     * For kernel builds, we emit these as byte arrays in AS 1 with a self-pointer
+     * at offset 0.
      * The first 8 bytes contain a pointer to offset +8 (the actual object data).
      * This allows the code to load the pointer and access the object fields.
      */
-    private void ensureStaticClassDataGlobalExists(String symbolName, int size) {
+    /**
+     * Ensures a global static class data structure exists for holding mutable
+     * static fields.
+     * This method handles both String constants and regular static fields, but with
+     * different approaches:
+     * - For String constants: uses the special layout required by runtime.c for
+     * proper string access
+     * - For other constants (including mutable static fields like cursorX,
+     * cursorY): uses standard layout
+     * This is important because String constants need the specific memory layout
+     * that runtime.c expects,
+     * while mutable static fields need to be in a format that supports read/write
+     * operations.
+     */
+    private void ensureStaticClassDataGlobalExists(String symbolName, int size, Constant constant) {
         // Check if already exists
         if (builder.getNamedGlobal(symbolName) != null) {
             return;
@@ -623,43 +683,151 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
         System.out.println("DEBUG ensureStaticClassDataGlobalExists: Creating " + symbolName + " with size " + size);
 
-        // For arrays and objects, create a structure: { ptr, data }
-        // Offset 0-7: Self-pointer to offset 8
-        // Offset 8+: Object data (header + fields/elements)
+        // Create the data portion (size - 8 bytes) - creating space for our structure
+        LLVMTypeRef byteType = builder.byteType();
+        LLVMTypeRef dataType = LLVM.LLVMArrayType(byteType, size - 8);
 
-        // Create the data portion (size - 8 bytes)
-        LLVMTypeRef dataType = LLVM.LLVMArrayType(builder.byteType(), size - 8);
+        // Initialize to null - will be set based on the type of constant
+        LLVMValueRef dataInit = null;
 
-        // Create structure: { i8*, [size-8 x i8] }
+        if (constant instanceof ImageHeapInstance) {
+            ImageHeapInstance heapInstance = (ImageHeapInstance) constant;
+
+            // Skip unreachable constants - we can't access their field values
+            if (!heapInstance.isReachable()) {
+                System.out.println(
+                        "DEBUG ensureStaticClassDataGlobalExists: Skipping unreachable constant " + symbolName);
+            } else {
+                AnalysisType type = heapInstance.getType();
+
+                // Special handling for String constants to ensure proper memory layout
+                if (type != null && type.getName().equals("Ljava/lang/String;")) {
+                    System.out.println(
+                            "DEBUG ensureStaticClassDataGlobalExists: Processing STRING constant for correct layout");
+
+                    // Extract string data for the special layout required by runtime.c
+                    ResolvedJavaField[] fields = type.getInstanceFields(true);
+                    for (ResolvedJavaField field : fields) {
+                        if (field.getName().equals("value") && field instanceof AnalysisField) {
+                            AnalysisField analysisField = (AnalysisField) field;
+                            Object fieldValue = heapInstance.getFieldValue(analysisField);
+
+                            if (fieldValue instanceof ImageHeapPrimitiveArray) {
+                                ImageHeapPrimitiveArray byteArray = (ImageHeapPrimitiveArray) fieldValue;
+
+                                Object arrayObj = byteArray.getArray();
+                                if (arrayObj instanceof byte[]) {
+                                    byte[] bytes = (byte[]) arrayObj;
+                                    String strValue = new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+                                    System.out.println("DEBUG ensureStaticClassDataGlobalExists: Processing string \""
+                                            + strValue + "\"");
+
+                                    // Create the special memory layout for String objects that runtime.c expects:
+                                    // Position 0-7: Hub pointer (zeros for constants)
+                                    // Position 8-15: Embedded "pointer" value (24) for byte array offset
+                                    // Position 16-19: Hash (zeros)
+                                    // Position 20: Coder (0 for LATIN1)
+                                    // Position 21-23: Padding (zeros)
+                                    // Position 24+: Byte array structure
+                                    // At offset 12 from byte array (i.e. position 36): String length
+                                    // At offset 16 from byte array (i.e. position 40): Character data
+
+                                    byte[] strData = new byte[size - 8];
+
+                                    // Position 8-15: Store byte array offset (24) as little-endian int64
+                                    // This is what runtime.c uses to calculate the actual byte array location
+                                    long byteArrayOffset = 24L;
+                                    for (int i = 0; i < 8; i++) {
+                                        strData[8 + i] = (byte) ((byteArrayOffset >> (i * 8)) & 0xFF);
+                                    }
+
+                                    // Position 20: Coder byte (0 for LATIN1 encoding)
+                                    strData[20] = 0;
+
+                                    // Position 36-39: String length (at offset 12 from the byte array starting at
+                                    // offset 24)
+                                    // This matches the access pattern: base + 24 + 12 = base + 36
+                                    strData[36] = (byte) (bytes.length & 0xFF);
+                                    strData[37] = (byte) ((bytes.length >> 8) & 0xFF);
+                                    strData[38] = (byte) ((bytes.length >> 16) & 0xFF);
+                                    strData[39] = (byte) ((bytes.length >> 24) & 0xFF);
+                                    System.out.println("DEBUG: Set strData[36-39] for string length " + bytes.length);
+
+                                    // Position 40+: Character data (at offset 16 from the byte array starting at
+                                    // offset 24)
+                                    for (int i = 0; i < bytes.length && (40 + i) < strData.length; i++) {
+                                        strData[40 + i] = bytes[i];
+                                    }
+
+                                    System.out.println(
+                                            "DEBUG ensureStaticClassDataGlobalExists: Completed special string layout for \""
+                                                    + strValue + "\"");
+
+                                    // Create the LLVM constant array for this specially formatted string data
+                                    LLVMValueRef[] dataElements = new LLVMValueRef[strData.length];
+                                    for (int i = 0; i < strData.length; i++) {
+                                        dataElements[i] = builder.constantByte(strData[i]);
+                                    }
+                                    dataInit = LLVM.LLVMConstArray(byteType, new PointerPointer<>(dataElements),
+                                            dataElements.length);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // For non-String objects, use standard zero initialization
+                    // This is important for mutable static fields like cursorX, cursorY
+                    // These need to be in a format that supports read/write operations properly
+                    System.out.println(
+                            "DEBUG ensureStaticClassDataGlobalExists: Using standard layout for non-String object: " +
+                                    (type != null ? type.getName() : "unknown type"));
+                    dataInit = LLVM.LLVMConstNull(dataType);
+                }
+            }
+        } else {
+            // For non-ImageHeapInstance constants, use standard approach
+            // These are likely other types of constants that should use normal
+            // initialization
+            System.out.println(
+                    "DEBUG ensureStaticClassDataGlobalExists: Using standard layout for non-ImageHeapInstance constant");
+            dataInit = LLVM.LLVMConstNull(dataType);
+        }
+
+        // If no specific initialization was done, use zero initialization
+        if (dataInit == null) {
+            dataInit = LLVM.LLVMConstNull(dataType);
+        }
+
+        // Create structure: { ptr addrspace(1), [size-8 x i8] }
+        // Use builder.objectType() which creates proper tracked pointer in AS 1
+        LLVMTypeRef ptrType = builder.objectType(false); // AS 1 pointer (tracked, not compressed)
         LLVMTypeRef structType = builder.structType(
-            LLVM.LLVMPointerType(builder.byteType(), 1),  // AS 1 pointer
-            dataType
-        );
+                ptrType,
+                dataType);
 
         // Create global with this struct type
         LLVMValueRef global = LLVM.LLVMAddGlobalInAddressSpace(
-            builder.getModule(),
-            structType,
-            symbolName,
-            1  // Address space 1 (managed)
+                builder.getModule(),
+                structType,
+                symbolName,
+                1 // Address space 1 (managed)
         );
 
-        // Initialize: { getelementptr to field 1, zeroinitializer }
+        // Initialize: { getelementptr to field 1, data }
         // Use InBounds GEP: indices are [0, 1] to get second field of struct
-        LLVMValueRef[] gepIndices = new LLVMValueRef[]{
-            builder.constantInt(0),  // Index into global
-            builder.constantInt(1)   // Index into struct (field 1)
+        LLVMValueRef[] gepIndices = new LLVMValueRef[] {
+                builder.constantInt(0), // Index into global
+                builder.constantInt(1) // Index into struct (field 1)
         };
         LLVMValueRef selfPtr = LLVM.LLVMConstInBoundsGEP(global, new PointerPointer<>(gepIndices), 2);
 
         LLVMValueRef initializer = LLVM.LLVMConstNamedStruct(
-            structType,
-            new PointerPointer<>(new LLVMValueRef[]{
-                selfPtr,  // Pointer to the data portion
-                LLVM.LLVMConstNull(dataType)  // Zero-initialized data
-            }),
-            2
-        );
+                structType,
+                new PointerPointer<>(new LLVMValueRef[] {
+                        selfPtr, // Pointer to the data portion
+                        dataInit // String data or zeros
+                }),
+                2);
 
         builder.setInitializer(global, initializer);
 
@@ -682,8 +850,8 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
             ImageHeapInstance heapInstance = (ImageHeapInstance) constant;
             AnalysisType constantType = heapInstance.getType();
             System.out.println("DEBUG emitLoadConstant: constant=" + (symbolName != null ? symbolName : "NEW") +
-                             ", getType()=" + (constantType != null ? constantType.getName() : "null") +
-                             ", SpawnIsolates=" + SubstrateOptions.SpawnIsolates.getValue());
+                    ", getType()=" + (constantType != null ? constantType.getName() : "null") +
+                    ", SpawnIsolates=" + SubstrateOptions.SpawnIsolates.getValue());
 
             // Check if this is a static class data structure (constant_Kernel_*)
             if (symbolName != null && symbolName.startsWith("constant_Kernel")) {
@@ -706,24 +874,17 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
                     isObjectConstant = true;
                 }
             }
-            System.out.println("DEBUG emitLoadConstant: isObjectConstant=" + isObjectConstant + ", isStaticClassData=" + isStaticClassData);
+            System.out.println("DEBUG emitLoadConstant: isObjectConstant=" + isObjectConstant + ", isStaticClassData="
+                    + isStaticClassData);
         }
 
         LLVMValueRef value;
         if (isStaticClassData) {
-            // For static class data (constant_Kernel_*), the global IS the object itself
-            // The global is [200 x i8] addrspace(1), referenced as ptr addrspace(1) [200 x i8]
-            // Use runtime GEP to get ptr addrspace(1) i8 to first element
-            // This avoids constant expression issues that cause LLVM crashes
-            LLVMValueRef global = getLLVMPlaceholderForConstant(constant);
-            System.out.println("DEBUG emitLoadConstant: Using runtime GEP for static class data " + symbolName);
-
-            // buildGEP with zero index to get address of first byte
-            // This converts from ptr addrspace(1) [200 x i8] to ptr addrspace(1) i8
-            LLVMValueRef zero = builder.constantInt(0);
-            value = builder.buildGEP(global, zero, zero);
-
-            System.out.println("DEBUG emitLoadConstant: Created runtime GEP for " + symbolName);
+            // For static class data (constant_Kernel_*), the global IS already a pointer in
+            // AS 1.
+            // Just use it directly - no GEP needed.
+            value = getLLVMPlaceholderForConstant(constant);
+            System.out.println("DEBUG emitLoadConstant: Using global directly for static class data " + symbolName);
         } else if (isObjectConstant) {
             // For object constants, call inline helper that does address space cast
             // The helper is marked alwaysinline and optimizes to a single addrspacecast
@@ -735,7 +896,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
             LLVMTypeRef funcType = builder.functionType(returnType, builder.rawPointerType());
             LLVMValueRef helperFunc = builder.getFunction("__llvm_load_object_from_untracked_pointer", funcType);
             value = builder.buildCall(helperFunc, i8Ptr);
-        } else{
+        } else {
             // For non-object constants, load as before
             value = builder.buildLoad(getLLVMPlaceholderForConstant(constant),
                     ((LLVMKind) kind.getPlatformKind()).get());
@@ -785,17 +946,20 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
             compilationResult.recordDataPatchWithNote(0, reference, symbolName);
         }
 
-        // For kernel builds without isolates, ImageHeapConstants are static class data structures
+        // For kernel builds without isolates, ImageHeapConstants are static class data
+        // structures
         // that hold mutable static fields (like cursorX/cursorY).
-        // Instead of external symbols in AS 0 that need __llvm_load_object_from_untracked_pointer,
-        // we create them directly as zero-initialized globals in AS 1 (managed address space).
+        // Instead of external symbols in AS 0 that need
+        // __llvm_load_object_from_untracked_pointer,
+        // we create them directly as zero-initialized globals in AS 1 (managed address
+        // space).
         boolean isKernelBuild = !SubstrateOptions.SpawnIsolates.getValue();
         boolean isImageHeapConstant = constant instanceof ImageHeapConstant;
         if (symbolName != null && symbolName.startsWith("constant_Kernel")) {
             System.out.println("DEBUG getLLVMPlaceholderForConstant: symbolName=" + symbolName +
-                             ", isKernelBuild=" + isKernelBuild +
-                             ", isImageHeapConstant=" + isImageHeapConstant +
-                             ", constantClass=" + constant.getClass().getName());
+                    ", isKernelBuild=" + isKernelBuild +
+                    ", isImageHeapConstant=" + isImageHeapConstant +
+                    ", constantClass=" + constant.getClass().getName());
         }
         if (isKernelBuild && isImageHeapConstant) {
             // For static class data structures, get the instance size from the type
@@ -809,33 +973,34 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
                         // AnalysisType might have layout information
                         Object wrappedType = constantType.getWrapped();
                         if (wrappedType instanceof com.oracle.svm.hosted.meta.HostedInstanceClass) {
-                            com.oracle.svm.hosted.meta.HostedInstanceClass hostedClass =
-                                (com.oracle.svm.hosted.meta.HostedInstanceClass) wrappedType;
+                            com.oracle.svm.hosted.meta.HostedInstanceClass hostedClass = (com.oracle.svm.hosted.meta.HostedInstanceClass) wrappedType;
                             size = hostedClass.getInstanceSize();
-                            System.out.println("DEBUG getLLVMPlaceholderForConstant: Got instance size " + size + " from HostedInstanceClass for " + symbolName);
+                            System.out.println("DEBUG getLLVMPlaceholderForConstant: Got instance size " + size
+                                    + " from HostedInstanceClass for " + symbolName);
                         } else {
                             System.out.println("DEBUG getLLVMPlaceholderForConstant: Wrapped type is " +
-                                (wrappedType != null ? wrappedType.getClass().getName() : "null") + " for " + symbolName);
+                                    (wrappedType != null ? wrappedType.getClass().getName() : "null") + " for "
+                                    + symbolName);
                         }
                     } catch (Exception e) {
-                        System.out.println("DEBUG getLLVMPlaceholderForConstant: Exception getting instance size: " + e.getMessage());
+                        System.out.println("DEBUG getLLVMPlaceholderForConstant: Exception getting instance size: "
+                                + e.getMessage());
                     }
                 } else {
                     System.out.println("DEBUG getLLVMPlaceholderForConstant: constantType is null for " + symbolName);
                 }
             }
 
-            System.out.println("DEBUG getLLVMPlaceholderForConstant: Creating global for " + symbolName + " with size " + size);
-            ensureStaticClassDataGlobalExists(symbolName, size);
+            System.out.println(
+                    "DEBUG getLLVMPlaceholderForConstant: Creating global for " + symbolName + " with size " + size);
+            ensureStaticClassDataGlobalExists(symbolName, size, constant);
 
-            // For static class data, return a GEP to the first element
-            // This converts ptr addrspace(1) [200 x i8] to ptr addrspace(1) i8
-            // Use runtime GEP instruction to avoid LLVM constant expression crashes
+            // For static class data, the global IS already what we need - a pointer in AS
+            // 1.
+            // Just return it directly.
             LLVMValueRef global = builder.getNamedGlobal(symbolName);
-            LLVMValueRef zero = builder.constantInt(0);
-            LLVMValueRef gep = builder.buildGEP(global, zero, zero);
-            System.out.println("DEBUG getLLVMPlaceholderForConstant: Returning GEP for " + symbolName);
-            return gep;
+            System.out.println("DEBUG getLLVMPlaceholderForConstant: Returning global directly: " + symbolName);
+            return global;
         }
 
         System.out.println("DEBUG getLLVMPlaceholderForConstant: Using getExternalObject for " + symbolName);
