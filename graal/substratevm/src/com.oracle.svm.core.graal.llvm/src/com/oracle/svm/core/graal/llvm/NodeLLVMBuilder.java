@@ -795,6 +795,10 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
                     base = builder.buildIntToPtr(base, builder.rawPointerType());
                 } else if (LLVMIRBuilder.isObjectType(baseType)) {
                     typeOverride = true;
+                } else if (LLVMIRBuilder.isPointerType(baseType)) {
+                    // For kernel builds without GC, raw pointers (AS 0) are used
+                    // Accept them as valid base addresses
+                    typeOverride = false;
                 } else {
                     throw shouldNotReachHere(LLVMUtils.dumpValues("unsupported base for address", base)); // ExcludeFromJacocoGeneratedReport
                 }

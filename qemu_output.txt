@@ -1,0 +1,22 @@
+as bootloader.asm -o ./obj/bootloader.o -msyntax=intel -mnaked-reg
+bootloader.asm: Assembler messages:
+bootloader.asm:22: Warning: mnemonic suffix used with `mov'
+bootloader.asm:22: Warning: NOTE: Such forms are deprecated and will be rejected by a future version of the assembler
+bootloader.asm:72: Warning: mnemonic suffix used with `mov'
+bootloader.asm:88: Warning: mnemonic suffix used with `mov'
+bootloader.asm:97: Warning: mnemonic suffix used with `test'
+bootloader.asm:109: Warning: mnemonic suffix used with `mov'
+bootloader.asm:110: Warning: mnemonic suffix used with `mov'
+bootloader.asm:123: Warning: mnemonic suffix used with `mov'
+bootloader.asm:125: Warning: mnemonic suffix used with `mov'
+bootloader.asm:127: Warning: mnemonic suffix used with `mov'
+gcc ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o -o ./build/BB.bin -Wall -Wextra -Wpedantic -std=gnu99 -ffreestanding -lgcc -nostdlib -mno-red-zone -mno-mmx -mno-sse -mno-sse2  -T linker.ld -O0
+qemu-system-x86_64 -nographic -serial mon:stdio -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=./build/BB.bin
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FCAF60+06F0AF60 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from Hard Disk..c[?7l[2JX                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                0

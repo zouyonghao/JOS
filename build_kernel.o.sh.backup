@@ -69,20 +69,20 @@ if [ -d "generated-llvm" ]; then
 			# Dump for debugging
 			llvm-dis generated-llvm/kernel_combined.ll -o generated-llvm/kernel_combined.ll.txt
 
-			# CRITICAL FIX: Return pointer to field 1 (Java object) not field 0
-			# The structure is: { ptr field0, [192 x i8] field1 }
-			# Field 0 at offset 0: self-reference pointer (unused)
-			# Field 1 at offset +8: the actual Java String object
-			# We need to return ptr to field 1, which is %0 + 8
-			echo "Patching __llvm_load_object_from_untracked_pointer to return pointer to Java object..."
+			# CRITICAL FIX: Modify __llvm_load_object_from_untracked_pointer to dereference pointer field
+			echo "Patching __llvm_load_object_from_untracked_pointer to load pointer from structure..."
 
-			# Change alwaysinline to noinline
+			# First, change alwaysinline to noinline to prevent optimization
 			sed -i 's/attributes #2 = { alwaysinline "gc-leaf-function"="true" }/attributes #2 = { noinline "gc-leaf-function"="true" }/' generated-llvm/kernel_combined.ll.txt
 
-			# Return pointer to field 1 (offset +8)
+			# In kernel mode with flat objects, the structure field may contain a DIRECT POINTER or NULL
+			# If NULL, return the input pointer itself (treat as identity for embedded objects)
+			# This handles both wrapper structures and embedded object fields
 			sed -i '/define linkonce ptr @__llvm_load_object_from_untracked_pointer/,/^}$/{
 				/^main:$/a\
-  %result = getelementptr i8, ptr %0, i64 8
+  %val = load ptr, ptr %0, align 8\
+  %is_null = icmp eq ptr %val, null\
+  %result = select i1 %is_null, ptr %0, ptr %val
 				s/ret ptr %0/ret ptr %result/
 			}' generated-llvm/kernel_combined.ll.txt
 

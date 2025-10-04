@@ -1038,10 +1038,39 @@ public class LLVMIRBuilder implements AutoCloseable {
     }
 
     public LLVMValueRef buildAdd(LLVMValueRef a, LLVMValueRef b) {
+        LLVMTypeRef aType = LLVM.LLVMTypeOf(a);
+        LLVMTypeRef bType = LLVM.LLVMTypeOf(b);
+
+        // Handle pointer arithmetic: if one operand is a pointer, use GEP or ptrtoint/add/inttoptr
+        if (isPointerType(aType) && isIntegerType(bType)) {
+            // pointer + integer: use GEP
+            return buildGEP(a, b);
+        } else if (isIntegerType(aType) && isPointerType(bType)) {
+            // integer + pointer: use GEP on the pointer
+            return buildGEP(b, a);
+        }
+
+        // Regular numeric addition
         return buildBinaryNumberOp(a, b, LLVM::LLVMBuildAdd, LLVM::LLVMBuildFAdd);
     }
 
     public LLVMValueRef buildSub(LLVMValueRef a, LLVMValueRef b) {
+        LLVMTypeRef aType = LLVM.LLVMTypeOf(a);
+        LLVMTypeRef bType = LLVM.LLVMTypeOf(b);
+
+        // Handle pointer arithmetic
+        if (isPointerType(aType) && isPointerType(bType)) {
+            // pointer - pointer: convert both to integers, subtract, return integer
+            LLVMValueRef aInt = buildPtrToInt(a);
+            LLVMValueRef bInt = buildPtrToInt(b);
+            return LLVM.LLVMBuildSub(builder, aInt, bInt, DEFAULT_INSTR_NAME);
+        } else if (isPointerType(aType) && isIntegerType(bType)) {
+            // pointer - integer: use GEP with negative index
+            LLVMValueRef negativeIndex = LLVM.LLVMBuildNeg(builder, b, DEFAULT_INSTR_NAME);
+            return buildGEP(a, negativeIndex);
+        }
+
+        // Regular numeric subtraction
         return buildBinaryNumberOp(a, b, LLVM::LLVMBuildSub, LLVM::LLVMBuildFSub);
     }
 
@@ -1211,6 +1240,23 @@ public class LLVMIRBuilder implements AutoCloseable {
     }
 
     public LLVMValueRef buildAnd(LLVMValueRef a, LLVMValueRef b) {
+        LLVMTypeRef aType = LLVM.LLVMTypeOf(a);
+        LLVMTypeRef bType = LLVM.LLVMTypeOf(b);
+
+        // Handle pointer masking: if one operand is a pointer, convert to int, AND, convert back
+        if (isPointerType(aType) && isIntegerType(bType)) {
+            // pointer AND integer: ptrtoint, and, inttoptr
+            LLVMValueRef ptrAsInt = buildPtrToInt(a);
+            LLVMValueRef result = LLVM.LLVMBuildAnd(builder, ptrAsInt, b, DEFAULT_INSTR_NAME);
+            return buildIntToPtr(result, aType);
+        } else if (isIntegerType(aType) && isPointerType(bType)) {
+            // integer AND pointer: ptrtoint, and, inttoptr
+            LLVMValueRef ptrAsInt = buildPtrToInt(b);
+            LLVMValueRef result = LLVM.LLVMBuildAnd(builder, a, ptrAsInt, DEFAULT_INSTR_NAME);
+            return buildIntToPtr(result, bType);
+        }
+
+        // Regular integer AND
         return LLVM.LLVMBuildAnd(builder, a, b, DEFAULT_INSTR_NAME);
     }
 

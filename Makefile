@@ -13,14 +13,15 @@ LDFLAGS= -lgcc -nostdlib
 
 # ALT-2, then type quit
 QEMUCMD = qemu-system-x86_64
-QEMUFLAGS = -nographic -display curses -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=
+QEMUFLAGS = -nographic -serial mon:stdio -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=
 
 OBJDIR = ./obj
 OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
 BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
-	$(CC) $(OBJLIST) -o $(BUILDDIR)/BB.bin $(CFLAGS) $(LDFLAGS) $(64BITFLAGS) $(DIRECTIVES) -T $(LINKER) $(OPTFLAGS)
+	$(CC) $(OBJLIST) -o $(BUILDDIR)/BB.elf $(CFLAGS) $(LDFLAGS) $(64BITFLAGS) $(DIRECTIVES) -T linker.ld $(OPTFLAGS) -Wl,--oformat=elf64-x86-64 -no-pie
+	objcopy -O binary $(BUILDDIR)/BB.elf $(BUILDDIR)/BB.bin
 
 qemu: BB.bin
 	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin

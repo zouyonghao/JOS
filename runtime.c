@@ -46,13 +46,12 @@ int32_t java_lang_String_length_Int(const void *java_string_obj) {
   if (java_string_obj == 0)
     return 0;
 
-  // Use the same approach as get_string_length for consistency between direct
-  // field access and charAt Read the byte array offset from offset 8-15
-  const uint64_t *offset_ptr =
-      (const uint64_t *)((const char *)java_string_obj + 8);
+  // The pointer we receive is to object data (self-pointer already skipped)
+  // Read the byte array offset from the start
+  const uint64_t *offset_ptr = (const uint64_t *)java_string_obj;
   uint64_t byte_array_offset = *offset_ptr;
 
-  // Calculate pointer to byte array (add offset to base)
+  // Calculate pointer to byte array (add offset to object data start)
   const uint8_t *byte_array =
       (const uint8_t *)java_string_obj + byte_array_offset;
 
@@ -83,12 +82,12 @@ static int32_t get_string_length(const void *java_string_obj) {
   if (java_string_obj == 0)
     return 0;
 
-  // Read the byte array offset from offset 8-15
-  const uint64_t *offset_ptr =
-      (const uint64_t *)((const char *)java_string_obj + 8);
+  // The pointer is to object data (self-pointer already skipped)
+  // Read the byte array offset from the start
+  const uint64_t *offset_ptr = (const uint64_t *)java_string_obj;
   uint64_t byte_array_offset = *offset_ptr;
 
-  // Calculate pointer to byte array (add offset to base)
+  // Calculate pointer to byte array (add offset to object data start)
   const uint8_t *byte_array =
       (const uint8_t *)java_string_obj + byte_array_offset;
 
@@ -110,17 +109,17 @@ static uint8_t get_string_byte(const void *java_string_obj, int32_t index) {
   if (java_string_obj == 0 || index < 0)
     return 0;
 
-  // Read the byte array offset from offset 8-15
-  const uint64_t *offset_ptr =
-      (const uint64_t *)((const char *)java_string_obj + 8);
+  // The pointer is to object data (self-pointer already skipped)
+  // Read the byte array offset from the start
+  const uint64_t *offset_ptr = (const uint64_t *)java_string_obj;
   uint64_t byte_array_offset = *offset_ptr;
 
-  // Calculate pointer to byte array (add offset to base)
+  // Calculate pointer to byte array (add offset to object data start)
   const uint8_t *byte_array =
       (const uint8_t *)java_string_obj + byte_array_offset;
 
-  // String data starts at offset 16 within byte array (after hub(8) +
-  // array_len(4) + string_len(4))
+  // Character data starts at offset 16 within byte array
+  // Structure: [4-byte length][12-byte padding/header][character data]
   const uint8_t *data = byte_array + 16;
 
   // Additional bounds check to prevent reading beyond reasonable string data
@@ -134,6 +133,11 @@ static uint8_t get_string_byte(const void *java_string_obj, int32_t index) {
 // charAt implementation - GraalVM generates calls to this for str.charAt()
 uint32_t java_lang_String_charAt_Int_retChar(const void *java_string_obj,
                                              int32_t index) {
+  // TEMP DEBUG: Output call info to serial
+  serial_write('{');
+  serial_write('0' + index);
+  serial_write('}');
+
   if (java_string_obj == 0 || index < 0)
     return 0;
 
@@ -145,6 +149,30 @@ uint32_t java_lang_String_charAt_Int_retChar(const void *java_string_obj,
   // reasonable limits
   if (index > 1000)
     return 0; // Prevent excessive memory access
+
+  // TEMP DEBUG: For index 0, output pointer address to serial
+  if (index == 0) {
+    serial_write('[');
+    uint64_t ptr_val = (uint64_t)java_string_obj;
+    // Output hex digits of pointer (lower 16 bits)
+    for (int i = 0; i < 4; i++) {
+      uint8_t nibble = (ptr_val >> (12 - i * 4)) & 0xF;
+      char hex_char = (nibble < 10) ? ('0' + nibble) : ('A' + nibble - 10);
+      serial_write(hex_char);
+    }
+
+    serial_write(' ');
+
+    // Also output the offset value
+    const uint64_t *offset_ptr = (const uint64_t *)java_string_obj;
+    uint64_t offset = *offset_ptr;
+    for (int i = 0; i < 4; i++) {
+      uint8_t nibble = (offset >> (12 - i * 4)) & 0xF;
+      char hex_char = (nibble < 10) ? ('0' + nibble) : ('A' + nibble - 10);
+      serial_write(hex_char);
+    }
+    serial_write(']');
+  }
 
   return (uint32_t)get_string_byte(java_string_obj, index);
 }

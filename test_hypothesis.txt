@@ -1,0 +1,9 @@
+The structure at 0x94d0:
+- Offset 0: 0x94d8 (this IS a pointer, not an offset!)
+- Offset 8 (at 0x94d8): 0x18 (this is data, specifically the first 8 bytes of the 192-byte array)
+
+So when we call __llvm_load_object_from_untracked_pointer(0x94d0):
+1. Load value at 0x94d0 = 0x94d8 (this is already a pointer!)
+2. We should just return it directly!
+
+The "offset" interpretation was WRONG. The field contains a direct pointer.

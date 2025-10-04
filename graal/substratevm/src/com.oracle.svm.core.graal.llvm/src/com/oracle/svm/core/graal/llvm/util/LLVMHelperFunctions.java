@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.graal.llvm.util;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.llvm.util.LLVMIRBuilder.Attribute;
 import com.oracle.svm.core.graal.llvm.util.LLVMIRBuilder.LinkageType;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
@@ -166,8 +167,14 @@ class LLVMHelperFunctions {
     private LLVMValueRef buildLoadObjectFromUntrackedPointerFunction(boolean compressed) {
         String funcName = compressed ? LOAD_COMPRESSED_OBJECT_FROM_UNTRACKED_POINTER_FUNCTION_NAME
                 : LOAD_OBJECT_FROM_UNTRACKED_POINTER_FUNCTION_NAME;
+
+        // For kernel builds without GC (-H:-SpawnIsolates), we use untracked pointers (AS 0)
+        // For regular builds with GC, we use tracked pointers (AS 1)
+        boolean isKernelBuild = !SubstrateOptions.SpawnIsolates.getValue();
+        LLVMTypeRef returnType = isKernelBuild ? builder.rawPointerType() : builder.objectType(compressed);
+
         LLVMValueRef func = builder.addFunction(funcName,
-                builder.functionType(builder.objectType(compressed), builder.rawPointerType()));
+                builder.functionType(returnType, builder.rawPointerType()));
         LLVMIRBuilder.setLinkage(func, LinkageType.LinkOnce);
         builder.setFunctionAttribute(func, Attribute.AlwaysInline);
         builder.setFunctionAttribute(func, Attribute.GCLeafFunction);
@@ -175,10 +182,16 @@ class LLVMHelperFunctions {
         LLVMBasicBlockRef block = builder.appendBasicBlock(func, "main");
         builder.positionAtEnd(block);
         LLVMValueRef address = LLVMIRBuilder.getParam(func, 0);
-        // For kernel builds without GC, just cast the pointer from AS 0 to AS 1
-        // Don't dereference it - the input is already the string data pointer
-        LLVMValueRef castedAddress = builder.buildAddrSpaceCast(address, builder.objectType(compressed));
-        builder.buildRet(castedAddress);
+
+        if (isKernelBuild) {
+            // For kernel builds without GC, just return the pointer as-is (AS 0)
+            // Don't cast to AS 1 - stay in untracked address space
+            builder.buildRet(address);
+        } else {
+            // For builds with GC, cast the pointer from AS 0 to AS 1 (managed/tracked)
+            LLVMValueRef castedAddress = builder.buildAddrSpaceCast(address, builder.objectType(compressed));
+            builder.buildRet(castedAddress);
+        }
 
         return func;
     }
