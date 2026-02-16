@@ -222,12 +222,8 @@ lmode:
 	mov rsp, 0x200000
 	mov rbp, rsp		# initialize stack to top of kernel memory
 
-	# Initialize R15 to point to graal_thread_local structure
-	# R15 is used by GraalVM for safepoint checks even without isolates
-	lea r15, [graal_thread_local]
-
-	# Test the kernel function call
-	call Kernel_startKernel_Long # call java main
+	# Call Java kernel entry point
+	call Kernel_startKernel_Long
 
 	# If we get here, the kernel returned successfully
 	cli

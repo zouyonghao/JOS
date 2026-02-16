@@ -11,6 +11,7 @@ SECTIONS {
     {
         __rodata_start = .;
         *(.rodata)
+        *(.rodata.*)
         __rodata_end = .;
     }
     .data :
@@ -20,5 +21,11 @@ SECTIONS {
     .bss :
     {
         *(.bss)
+    }
+    /DISCARD/ :
+    {
+        *(.eh_frame)
+        *(.note.*)
+        *(.comment)
     }
 }
