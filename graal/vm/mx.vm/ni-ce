@@ -1,2 +1,0 @@
-DYNAMIC_IMPORTS=/substratevm
-NATIVE_IMAGES=native-image,lib:native-image-agent,lib:native-image-diagnostics-agent

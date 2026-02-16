@@ -1,8 +1,0 @@
-[[rule]]
-files = "FutureDefaultsOptions.java"
-all = [
-    "vojin.jovanovic@oracle.com",
-    "christian.wirth@oracle.com"
-]
-any = [
-]
