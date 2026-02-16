@@ -14,7 +14,7 @@ QEMUCMD = qemu-system-x86_64
 QEMUFLAGS = -nographic -display curses -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=
 
 OBJDIR = ./obj
-OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o
+OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o ./obj/interrupts_asm.o
 BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
@@ -31,6 +31,9 @@ $(OBJDIR)/runtime.o: runtime.c $(OBJDIR)
 
 $(OBJDIR)/bootloader.o : bootloader.asm $(OBJDIR)
 	$(AS) bootloader.asm -o $(OBJDIR)/bootloader.o $(ASFLAGS)
+
+$(OBJDIR)/interrupts_asm.o : interrupts.asm $(OBJDIR)
+	$(AS) interrupts.asm -o $(OBJDIR)/interrupts_asm.o
 
 $(BUILDDIR) :
 	test ! -d $(BUILDDIR) && mkdir $(BUILDDIR)
