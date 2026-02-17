@@ -22,8 +22,8 @@ SBF_HEADER_SIZE = 16
 def read_elf(elf_path):
     """
     Read an ELF file and extract the loadable segments.
-    Returns a tuple of (entry_point, code_bytes, data_bytes).
-    For simplicity, we assume a single code segment and no data for now.
+    Returns a tuple of (entry_offset, flat_image) where flat_image preserves
+    the virtual address layout so RIP-relative addressing works correctly.
     """
     with open(elf_path, "rb") as f:
         elf_data = f.read()
@@ -55,9 +55,8 @@ def read_elf(elf_path):
     # e_phnum: number of program headers (offset 0x38, 2 bytes)
     phnum = struct.unpack("<H", elf_data[0x38:0x3A])[0]
 
-    # Read program headers and extract loadable segments
-    code_segments = []
-    data_segments = []
+    # Read all LOAD segments with their virtual addresses
+    segments = []
 
     for i in range(phnum):
         ph_start = phoff + i * phentsize
@@ -76,61 +75,63 @@ def read_elf(elf_path):
             # p_flags: flags (offset 4, 4 bytes)
             p_flags = struct.unpack("<I", elf_data[ph_start+4:ph_start+8])[0]
 
-            segment_data = elf_data[p_offset:p_offset + p_filesz]
+            if p_filesz > 0:
+                segment_data = elf_data[p_offset:p_offset + p_filesz]
+                segments.append((p_vaddr, p_flags, segment_data))
 
-            # PF_X = 1 (executable), classify as code
-            if p_flags & 1:
-                code_segments.append((p_vaddr, segment_data))
-            else:
-                data_segments.append((p_vaddr, segment_data))
+    if not segments:
+        raise ValueError("No loadable segments found")
 
-    # Combine code segments
-    if code_segments:
-        # Sort by virtual address and concatenate
-        code_segments.sort(key=lambda x: x[0])
-        # For simplicity, use the first code segment's data
-        code_bytes = code_segments[0][1]
-    else:
-        code_bytes = b""
+    # Find the executable segment as the base
+    exec_segments = [s for s in segments if s[1] & 1]  # PF_X = 1
+    if not exec_segments:
+        raise ValueError("No executable segment found")
 
-    # Combine data segments
-    if data_segments:
-        data_segments.sort(key=lambda x: x[0])
-        data_bytes = b"".join(seg[1] for seg in data_segments)
-    else:
-        data_bytes = b""
+    base_addr = exec_segments[0][0]
 
-    return entry_point, code_bytes, data_bytes
+    # Build a flat image preserving virtual address layout
+    # Only include segments at or after the code base address
+    load_segments = [s for s in segments if s[0] >= base_addr]
+    if not load_segments:
+        raise ValueError("No segments to load")
+
+    max_addr = max(s[0] + len(s[2]) for s in load_segments)
+    image_size = max_addr - base_addr
+
+    flat_image = bytearray(image_size)
+    for vaddr, flags, data in load_segments:
+        offset = vaddr - base_addr
+        flat_image[offset:offset + len(data)] = data
+
+    entry_offset = entry_point - base_addr
+
+    return entry_offset, bytes(flat_image)
 
 
-def create_sbf(entry_point, code_bytes, data_bytes, output_path):
+def create_sbf(entry_offset, flat_image, output_path):
     """
-    Create an SBF file from the extracted ELF data.
+    Create an SBF file from a flat memory image.
+    The image preserves the ELF virtual address layout so RIP-relative
+    addressing works regardless of the load address.
     """
-    # For now, entry point is relative to start of code
-    # In a real implementation, we'd calculate the offset properly
-    entry_offset = 0
-
-    code_size = len(code_bytes)
-    data_size = len(data_bytes)
+    code_size = len(flat_image)
+    data_size = 0  # Everything is in the flat image
 
     # Build SBF header
     header = SBF_MAGIC
     header += struct.pack("<I", entry_offset)  # Entry point offset
-    header += struct.pack("<I", code_size)     # Code size
-    header += struct.pack("<I", data_size)     # Data size
+    header += struct.pack("<I", code_size)     # Image size
+    header += struct.pack("<I", data_size)     # Data size (0)
 
     # Write SBF file
     with open(output_path, "wb") as f:
         f.write(header)
-        f.write(code_bytes)
-        f.write(data_bytes)
+        f.write(flat_image)
 
     print(f"Created {output_path}:")
     print(f"  Entry point offset: {entry_offset}")
-    print(f"  Code size: {code_size} bytes")
-    print(f"  Data size: {data_size} bytes")
-    print(f"  Total size: {SBF_HEADER_SIZE + code_size + data_size} bytes")
+    print(f"  Image size: {code_size} bytes")
+    print(f"  Total size: {SBF_HEADER_SIZE + code_size} bytes")
 
 
 def main():
@@ -142,8 +143,8 @@ def main():
     output_path = sys.argv[2]
 
     try:
-        entry_point, code_bytes, data_bytes = read_elf(elf_path)
-        create_sbf(entry_point, code_bytes, data_bytes, output_path)
+        entry_offset, flat_image = read_elf(elf_path)
+        create_sbf(entry_offset, flat_image, output_path)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)

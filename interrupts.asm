@@ -79,7 +79,6 @@ isr_stub 46
 isr_stub 47
 
 # Syscall handler (vector 0x80) - special handling for system calls
-# Uses the same calling convention but for syscalls we need to save/restore args
 .globl isr_handler_128
 isr_handler_128:
     pushq $128
@@ -106,8 +105,29 @@ common_isr_handler:
 
     # Call C interrupt handler with vector number as argument
     # Vector number is at 120(%rsp) = 15 regs * 8 + original push
+
+    # For syscalls (vector 0x80), save register args to Java globals
+    cmpq $0x80, 120(%rsp)
+    jne .not_syscall_save
+    movq 112(%rsp), %rax
+    movq %rax, Kernel_syscallNum(%rip)        # RAX = syscall number
+    movq 64(%rsp), %rax
+    movq %rax, Kernel_syscallArg1(%rip)       # RDI = arg1
+    movq 72(%rsp), %rax
+    movq %rax, Kernel_syscallArg2(%rip)       # RSI = arg2
+    movq 96(%rsp), %rax
+    movq %rax, Kernel_syscallArg3(%rip)       # RDX = arg3
+.not_syscall_save:
+
     movq 120(%rsp), %rdi
     call interrupt_dispatch
+
+    # For syscalls, write return value back to saved RAX
+    cmpq $0x80, 120(%rsp)
+    jne .not_syscall_ret
+    movq Kernel_syscallRet(%rip), %rax
+    movq %rax, 112(%rsp)
+.not_syscall_ret:
 
     # Restore all general purpose registers
     popq %r15
@@ -278,3 +298,17 @@ isr_stub_table:
     .quad isr_handler_45
     .quad isr_handler_46
     .quad isr_handler_47
+
+# Syscall handler address - stored separately to avoid large padding
+.globl syscall_handler_addr
+syscall_handler_addr:
+    .quad isr_handler_128
+
+# Switch back to text section for the getter function
+.section .text
+
+# Function to get the syscall handler address (for C code)
+.globl get_syscall_handler
+get_syscall_handler:
+    leaq isr_handler_128(%rip), %rax
+    ret

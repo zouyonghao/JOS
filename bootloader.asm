@@ -21,16 +21,26 @@ boot:
 
 	movb [disk], dl	
 
-	mov ax, 0x0241		# ah = 0x02 (read sector function of int 0x13), al = 65 (read 65 sectors)
-				# sector count could theoretically be 255, but 65 is the max that can be read
-				# without crossing a segment boundary
-				# 65 sectors is roughly 33k of disk space, so make sure you have disk drivers
-				# up and running before your kernel binary grows beyond this size, else
-				# some data will not be loaded
-	mov bx, 0x7E00		# es:bx = memory location to copy data into, es already zeroed
+	# Stage 1: Read first 65 sectors to 0x0000:0x7E00 (fills memory up to 0x10000)
+	mov ax, 0x0241		# ah = 0x02 (read), al = 65 (max without crossing segment boundary)
+	mov bx, 0x7E00		# es:bx = destination, es already zeroed
 	mov cx, 0x0002		# ch = 0x00 (track idx), cl = 0x02 (sector idx to start reading from)
-	xor dh, dh		# dh = 0x00 (head idx), dl = drive number (implicitly placed in dl by BIOS on startup)
-	int 0x13		# copy data
+	xor dh, dh		# dh = 0x00 (head idx), dl = drive number (set by BIOS)
+	int 0x13		# read sectors
+
+	# Stage 2: Read additional sectors past segment boundary (ES adjusted)
+	# Loads 64 more sectors to 0x1000:0x0000 = physical 0x10000
+	# CHS for LBA 66: Cylinder=0, Head=1, Sector=4 (63 sectors/track geometry)
+	mov ax, 0x1000
+	mov es, ax		# ES = 0x1000
+	xor bx, bx		# BX = 0 → destination = 0x1000:0x0000
+	mov ax, 0x0240		# ah = 0x02 (read), al = 64 sectors
+	mov cx, 0x0004		# ch = 0x00 (cylinder), cl = 0x04 (sector 4)
+	mov dh, 1		# head 1
+	movb dl, [disk]		# drive number
+	int 0x13		# read sectors
+	xor ax, ax
+	mov es, ax		# restore ES = 0 for E820 and other code
 
 
 .check_CPUID:

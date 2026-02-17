@@ -23,5 +23,4 @@ kernel_print:
 kernel_exit:
     movq $2, %rax          # SYS_EXIT syscall number
     int $0x80              # Trigger syscall
-    # Should not return here, but just in case:
-    jmp .
+    ret                    # Return to caller so _start can unwind back to kernel

@@ -93,6 +93,7 @@ extern void pic_send_eoi(uint8_t irq);
 
 // ISR handler addresses from assembly
 extern void* isr_stub_table[];
+extern void* get_syscall_handler(void);
 
 // Global state
 static uint64_t timer_ticks = 0;
@@ -133,31 +134,12 @@ extern int64_t Kernel_syscallArg3;
 extern int64_t Kernel_syscallRet;
 
 // Called from assembly - forwards to Java
+// NOTE: For syscalls (vector 0x80), the assembly stub in interrupts.asm
+// saves RAX, RDI, RSI, RDX to Java globals BEFORE calling this function.
+// The assembly stub also restores the return value from Java back to RAX
+// AFTER this function returns (in the interrupt epilogue).
 void interrupt_dispatch(uint64_t vector) {
-  if (vector == 0x80) {
-    // Syscall: save register values to Java globals before calling handler
-    // RAX = syscall number, RDI = arg1, RSI = arg2, RDX = arg3
-    int64_t rax, rdi, rsi, rdx;
-    __asm__ volatile(
-        "mov %%rax, %0\n"
-        "mov %%rdi, %1\n"
-        "mov %%rsi, %2\n"
-        "mov %%rdx, %3\n"
-        : "=r"(rax), "=r"(rdi), "=r"(rsi), "=r"(rdx)
-    );
-    Kernel_syscallNum = rax;
-    Kernel_syscallArg1 = rdi;
-    Kernel_syscallArg2 = rsi;
-    Kernel_syscallArg3 = rdx;
-  }
-  
   Kernel_handleInterrupt_Int((int32_t)vector);
-  
-  if (vector == 0x80) {
-    // Syscall: put return value back in RAX
-    int64_t ret = Kernel_syscallRet;
-    __asm__ volatile("mov %0, %%rax" : : "r"(ret) : "rax");
-  }
 }
 
 // =============================================================================
@@ -225,6 +207,10 @@ void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_
   (void)handlerAddr;  // Unused - we get addresses from isr_stub_table
   if (vector >= 0 && vector < 48) {
     idt_set_gate(vector, isr_stub_table[vector], (uint8_t)typeAttr);
+  } else if (vector == 0x80) {
+    // Syscall vector - use getter function to obtain handler address
+    void* handler = get_syscall_handler();
+    idt_set_gate(vector, handler, (uint8_t)typeAttr);
   }
 }
 
