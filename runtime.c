@@ -93,6 +93,10 @@ void Kernel_outb_Int_Char(int32_t port, int32_t data) {
   outb((uint16_t)port, (uint8_t)data);
 }
 
+void Kernel_outl_Int_Int(int32_t port, int32_t data) {
+  __asm__ volatile("outl %0, %1" : : "a"(data), "Nd"((uint16_t)port));
+}
+
 void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {
   (void)handlerAddr;  // Unused - we get addresses from isr_stub_table
   if (vector >= 0 && vector < 48) {

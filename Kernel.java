@@ -174,6 +174,28 @@ public class Kernel {
         return true;
     }
     
+    // Helper to check if buffer matches "shutdown" (8 chars)
+    private static boolean isShutdown() {
+        if (inputIndex != 8) return false;
+        if (c1 != 's') return false;
+        if (c2 != 'h') return false;
+        if (c3 != 'u') return false;
+        if (c4 != 't') return false;
+        if (c5 != 'd') return false;
+        if (c6 != 'o') return false;
+        if (c7 != 'w') return false;
+        if (c8 != 'n') return false;
+        return true;
+    }
+    
+    // Native method for 32-bit port output (needed for ACPI shutdown)
+    public static native void outl(int port, int data);
+    
+    private static void shutdown() {
+        // ACPI shutdown for QEMU (port 0x604, value 0x2000)
+        outl(0x604, 0x2000);
+    }
+    
     private static void resetBuffer() {
         c1 = 0; c2 = 0; c3 = 0; c4 = 0; c5 = 0; c6 = 0;
         c7 = 0; c8 = 0; c9 = 0; c10 = 0; c11 = 0; c12 = 0;
@@ -225,6 +247,7 @@ public class Kernel {
             writeString("  info    - Show system information\n");
             writeString("  reboot  - Restart the system\n");
             writeString("  time    - Show timer tick count\n");
+            writeString("  shutdown- Power off the system\n");
         } else if (isClear()) {
             clearScreen();
         } else if (isInfo()) {
@@ -238,6 +261,10 @@ public class Kernel {
             loadIDT();
         } else if (isTime()) {
             writeString("Timer running. Check the spinner at top-right!\n");
+        } else if (isShutdown()) {
+            writeString("Shutting down...\n");
+            shutdown();
+            writeString("Shutdown failed.\n");
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }
