@@ -82,7 +82,7 @@ disk: BB.bin
 # Run QEMU with disk image (for testing user programs)
 # Filesystem is embedded in the kernel disk image at 1MB offset (sector 2048)
 qemu-disk: disk
-	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin)
+	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
 
 # Read filesystem from same drive (drive 0) at offset 2048 (1MB)
 # This requires kernel changes to read from sector 2048+
