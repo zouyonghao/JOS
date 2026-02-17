@@ -1517,12 +1517,15 @@ public class Kernel {
             return;
         }
         
-        // Simple debug: just print first 4 bytes as chars
-        writeString("  Data: ");
-        writeChar(readMemoryByte(buffer));
-        writeChar(readMemoryByte(buffer + 1));
-        writeChar(readMemoryByte(buffer + 2));
-        writeChar(readMemoryByte(buffer + 3));
+        // Debug: print bytes as hex
+        writeString("  Hex: ");
+        writeHexByte((int)readMemoryByte(buffer));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer + 1));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer + 2));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer + 3));
         writeString("\n");
         
         // Verify magic number
