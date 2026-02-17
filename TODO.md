@@ -24,4 +24,3 @@
 
 ## Infrastructure
 - [x] Automated test harness (boot QEMU, capture serial output, check for PASS/FAIL)
-- [ ] CI build verification

@@ -70,3 +70,16 @@ test-memory: BB.bin
 
 test-command: BB.bin
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test command
+
+# Create disk image with user programs
+disk: BB.bin
+	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf
+	@echo "Created $(BUILDDIR)/disk.img"
+
+# Run QEMU with disk image (for testing user programs)
+qemu-disk: disk
+	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin -drive format=raw,file=$(BUILDDIR)/disk.img,if=ide,index=1
+
+# Run QEMU with serial output (for CI/testing)
+qemu-serial: BB.bin
+	$(QEMUCMD) -nographic -serial stdio -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -drive format=raw,file=$(BUILDDIR)/BB.bin

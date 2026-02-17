@@ -45,6 +45,34 @@ Run `make test` to execute the automated test suite in `test/`:
 
 Test commands:
 - `make test` — Run all tests with build
+
+### Testing User Programs
+
+1. **Build the user program:**
+   ```bash
+   cd user && make
+   ```
+
+2. **Create disk image with the program:**
+   ```bash
+   make disk
+   ```
+
+3. **Run QEMU with the disk:**
+   ```bash
+   make qemu-disk
+   ```
+
+4. **In the kernel shell, run the program:**
+   ```
+   > ls
+   hello.sbf (432 bytes)
+   > run hello.sbf
+   Hello from user program!
+   >
+   ```
+
+The `run` command loads the SBF binary from the disk filesystem and executes it.
 - `make test-verbose` — Run tests with verbose output
 - `make test-boot` — Run only boot test
 - `make test-memory` — Run only memory test
