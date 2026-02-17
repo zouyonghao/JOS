@@ -856,6 +856,52 @@ public class JavaToLLVM {
                     pc++; break;
                 }
 
+                // ===== Array operations =====
+                case 0xBC: // newarray
+                {
+                    int typeCode = code[pc + 1] & 0xFF;
+                    String count = pop();
+                    translateNewArray(typeCode, count);
+                    pc += 2; break;
+                }
+                case 0xBD: // anewarray
+                {
+                    // Skip the class ref, treat same as newarray for object references
+                    String count = pop();
+                    translateNewArray(0, count); // 0 = treat as pointer array
+                    pc += 3; break;
+                }
+                case 0xBE: // arraylength
+                {
+                    String arrRef = pop();
+                    // Cast i8* to i64* to load length
+                    String lenPtr = nextSSA();
+                    emit("  " + lenPtr + " = bitcast i8* " + arrRef + " to i64*");
+                    String r = nextSSA();
+                    emit("  " + r + " = load i64, i64* " + lenPtr + ", align 8");
+                    // Truncate to i32 for Java stack
+                    String r32 = nextSSA();
+                    emit("  " + r32 + " = trunc i64 " + r + " to i32");
+                    push(r32, 'i');
+                    pc++; break;
+                }
+                case 0x2E: // iaload
+                    translateArrayLoad("i32", 4, 'i'); pc++; break;
+                case 0x4F: // iastore
+                    translateArrayStore("i32", 4); pc++; break;
+                case 0x2F: // laload
+                    translateArrayLoad("i64", 8, 'l'); pc++; break;
+                case 0x50: // lastore
+                    translateArrayStore("i64", 8); pc++; break;
+                case 0x34: // caload
+                    translateArrayLoad("i16", 2, 'i'); pc++; break;
+                case 0x55: // castore
+                    translateArrayStore("i16", 2); pc++; break;
+                case 0x33: // baload
+                    translateArrayLoad("i8", 1, 'i'); pc++; break;
+                case 0x54: // bastore
+                    translateArrayStore("i8", 1); pc++; break;
+
                 // ===== Switch statements =====
                 case 0xAA: // tableswitch
                 {
@@ -1062,6 +1108,133 @@ public class JavaToLLVM {
     static void translateAstore(int idx) {
         String val = pop();
         emit("  store i8* " + val + ", i8** %local." + idx);
+    }
+
+    // Array element sizes: 0=ref, 4=boolean, 5=char, 6=float, 7=double, 8=byte, 9=short, 10=int, 11=long
+    static void translateNewArray(int typeCode, String count) {
+        int elemSize;
+        switch (typeCode) {
+            case 4: case 8: elemSize = 1; break; // boolean, byte
+            case 5: case 9: elemSize = 2; break; // char, short
+            case 6: case 10: elemSize = 4; break; // float, int
+            case 7: case 11: elemSize = 8; break; // double, long
+            default: elemSize = 8; break; // object reference (0 or unknown)
+        }
+        
+        // Zero-extend count to i64 for size calculation
+        String count64 = nextSSA();
+        emit("  " + count64 + " = zext i32 " + count + " to i64");
+        
+        // Calculate element bytes: count * elemSize
+        String elemBytes = nextSSA();
+        emit("  " + elemBytes + " = mul i64 " + count64 + ", " + elemSize);
+        
+        // Calculate total size: 8 (header) + elemBytes
+        String totalSize = nextSSA();
+        emit("  " + totalSize + " = add i64 " + elemBytes + ", 8");
+        
+        // Allocate memory using malloc - will be linked from runtime
+        String arrRef = nextSSA();
+        emit("  " + arrRef + " = call i8* @malloc(i64 " + totalSize + ")");
+        
+        // Store length at offset 0 (cast to i64* first)
+        String lenPtr = nextSSA();
+        emit("  " + lenPtr + " = bitcast i8* " + arrRef + " to i64*");
+        emit("  store i64 " + count64 + ", i64* " + lenPtr + ", align 8");
+        
+        push(arrRef, 'p');
+        
+        // Register malloc as external
+        registerMalloc();
+    }
+    
+    static boolean mallocRegistered = false;
+    static void registerMalloc() {
+        if (!mallocRegistered) {
+            externFunctions.add("declare dso_local i8* @malloc(i64)");
+            mallocRegistered = true;
+        }
+    }
+    
+    // Generic array load: pop index, then array ref, compute addr, load value
+    static void translateArrayLoad(String llvmType, int elemSize, char resultType) {
+        String index = pop();
+        String arrRef = pop();
+        
+        // Zero-extend index to i64
+        String idx64 = nextSSA();
+        emit("  " + idx64 + " = zext i32 " + index + " to i64");
+        
+        // Calculate element offset: index * elemSize
+        String elemOffset = nextSSA();
+        emit("  " + elemOffset + " = mul i64 " + idx64 + ", " + elemSize);
+        
+        // Calculate data offset: elemOffset + 8 (header)
+        String dataOffset = nextSSA();
+        emit("  " + dataOffset + " = add i64 " + elemOffset + ", 8");
+        
+        // Get element pointer: arrRef + dataOffset
+        String elemPtr = nextSSA();
+        emit("  " + elemPtr + " = getelementptr i8, i8* " + arrRef + ", i64 " + dataOffset);
+        
+        // Cast to element type pointer and load
+        String typedPtr = nextSSA();
+        String r = nextSSA();
+        emit("  " + typedPtr + " = bitcast i8* " + elemPtr + " to " + llvmType + "*");
+        emit("  " + r + " = load " + llvmType + ", " + llvmType + "* " + typedPtr);
+        
+        // For byte/char, may need to zero-extend to i32
+        if (llvmType.equals("i8")) {
+            String ext = nextSSA();
+            emit("  " + ext + " = zext i8 " + r + " to i32");
+            push(ext, 'i');
+        } else if (llvmType.equals("i16")) {
+            String ext = nextSSA();
+            emit("  " + ext + " = zext i16 " + r + " to i32");
+            push(ext, 'i');
+        } else {
+            push(r, resultType);
+        }
+    }
+    
+    // Generic array store: pop value, index, then array ref, compute addr, store value
+    static void translateArrayStore(String llvmType, int elemSize) {
+        String value = pop();
+        String index = pop();
+        String arrRef = pop();
+        
+        // For i8/i16, truncate value if needed
+        String storeVal = value;
+        if (llvmType.equals("i8")) {
+            String trunc = nextSSA();
+            emit("  " + trunc + " = trunc i32 " + value + " to i8");
+            storeVal = trunc;
+        } else if (llvmType.equals("i16")) {
+            String trunc = nextSSA();
+            emit("  " + trunc + " = trunc i32 " + value + " to i16");
+            storeVal = trunc;
+        }
+        
+        // Zero-extend index to i64
+        String idx64 = nextSSA();
+        emit("  " + idx64 + " = zext i32 " + index + " to i64");
+        
+        // Calculate element offset: index * elemSize
+        String elemOffset = nextSSA();
+        emit("  " + elemOffset + " = mul i64 " + idx64 + ", " + elemSize);
+        
+        // Calculate data offset: elemOffset + 8 (header)
+        String dataOffset = nextSSA();
+        emit("  " + dataOffset + " = add i64 " + elemOffset + ", 8");
+        
+        // Get element pointer: arrRef + dataOffset
+        String elemPtr = nextSSA();
+        emit("  " + elemPtr + " = getelementptr i8, i8* " + arrRef + ", i64 " + dataOffset);
+        
+        // Cast to element type pointer and store
+        String typedPtr = nextSSA();
+        emit("  " + typedPtr + " = bitcast i8* " + elemPtr + " to " + llvmType + "*");
+        emit("  store " + llvmType + " " + storeVal + ", " + llvmType + "* " + typedPtr);
     }
 
     static void translateBinOp(String op, String type) {

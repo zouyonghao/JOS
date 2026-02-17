@@ -36,7 +36,25 @@ Always implement functionality in Java (`Kernel.java`) whenever possible. Only f
 Four-space indentation in Java, two spaces in C. Java types use UpperCamelCase with lowerCamelCase methods. Native methods declared in `Kernel.java` are implemented in `runtime.c` with mangled names (e.g., `Kernel_writeMemory_Long_Char`). Assembly uses Intel syntax with inline comments.
 
 ## Testing & Validation Guidelines
-No automated test suite. Validate by booting in QEMU and checking console output. Key things to verify after changes:
+
+### Automated Test Harness
+Run `make test` to execute the automated test suite in `test/`:
+- **Boot test** (`test/test_boot.py`): Verifies kernel boots and shows `> ` prompt
+- **Memory test** (`test/test_memory.py`): Runs `vmtest` command and checks for "PASS: Virtual memory works!"
+- **Command test** (`test/test_command.py`): Verifies kernel reaches command-ready state
+
+Test commands:
+- `make test` — Run all tests with build
+- `make test-verbose` — Run tests with verbose output
+- `make test-boot` — Run only boot test
+- `make test-memory` — Run only memory test
+- `make test-command` — Run only command test
+- `python3 test/run_tests.py --help` — See test runner options
+
+The test harness uses `qemu-system-x86_64 -nographic` to capture serial output via COM1 and verifies expected patterns appear.
+
+### Manual Validation
+Key things to verify after changes:
 - `grep "phi" generated-llvm/Kernel.ll` — confirm phi nodes present at merge blocks
 - `clang -c generated-llvm/Kernel.ll -o /dev/null` — verify LLVM IR is valid
 - Boot in QEMU and check: memory init shows `freePages > 0`, VM test prints `PASS`, command prompt `>` appears, keyboard input works, spinner animates.

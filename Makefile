@@ -52,3 +52,21 @@ clean :
 	rm -rf $(OBJLIST)
 	rm -f $(BUILDDIR)/BB.bin
 	rm -f *.class
+
+# Run automated test harness
+test: BB.bin
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin
+
+# Run tests with verbose output
+test-verbose: BB.bin
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin -v
+
+# Run specific tests
+test-boot: BB.bin
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test boot
+
+test-memory: BB.bin
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test memory
+
+test-command: BB.bin
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test command

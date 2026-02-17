@@ -1,14 +1,14 @@
 # JOS TODO
 
 ## Translator (JavaToLLVM.java)
-- [ ] Array support (`newarray`, `iastore`, `iaload`, `arraylength`, `bastore`, `baload`, etc.)
+- [x] Array support (`newarray`, `iastore`, `iaload`, `arraylength`, `bastore`, `baload`, etc.)
 - [ ] Multi-class support (translate multiple .class files, resolve cross-class references)
 - [x] `tableswitch` / `lookupswitch` opcodes (for switch statements)
 - [x] `ineg` / `lneg` opcodes
 - [x] Constant pool `Integer` entries used by `ldc` (currently only handles strings)
 
 ## Kernel (Kernel.java)
-- [ ] Proper heap allocator with free (replace bump allocator)
+- [x] Proper heap allocator with free (replace bump allocator)
 - [x] More shell commands (memstat, dump, peek, poke)
 - [x] Serial port output (COM1) for better QEMU debugging
 - [x] ATA PIO disk read support (port I/O based, implementable in Java)
@@ -21,5 +21,5 @@
 - [ ] ELF loader (load user programs from disk into user-mode pages)
 
 ## Infrastructure
-- [ ] Automated test harness (boot QEMU, capture serial output, check for PASS/FAIL)
+- [x] Automated test harness (boot QEMU, capture serial output, check for PASS/FAIL)
 - [ ] CI build verification

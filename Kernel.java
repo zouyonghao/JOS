@@ -75,8 +75,17 @@ public class Kernel {
     // Heap starts at 4MB
     private static final long HEAP_START = 0x400000L;
     private static final long HEAP_SIZE = 0x400000L;      // 4MB heap
+    private static final long HEAP_HEADER_SIZE = 8;       // Size of block header (8 bytes)
+    private static final long HEAP_MIN_BLOCK_SIZE = 16;   // Minimum allocatable block size
+    private static final long HEAP_ALLOCATED_FLAG = 0x8000000000000000L;  // High bit marks allocated
+    
+    // Heap statistics
     private static long heapCurrent = HEAP_START;
     private static long heapEnd = HEAP_START + HEAP_SIZE;
+    private static long freeListHead = 0;                 // Head of free list (0 = empty)
+    private static long heapTotalAllocated = 0;           // Total bytes allocated
+    private static long heapTotalFree = 0;                // Total bytes free
+    private static int heapFreeBlocks = 0;                // Number of free blocks
     
     // ===================================================================
     // PHYSICAL MEMORY MANAGER (Bitmap-based)
@@ -355,30 +364,265 @@ public class Kernel {
     }
     
     // ===================================================================
-    // HEAP ALLOCATOR (Simple bump allocator with page allocation)
+    // HEAP ALLOCATOR (Free list allocator with coalescing)
     // ===================================================================
     
-    private static long heapAlloc(long size) {
-        // Align to 8 bytes
-        size = (size + 7) & ~7;
+    // Get block size from header (masked to remove allocated flag)
+    private static long getBlockSize(long header) {
+        return header & ~HEAP_ALLOCATED_FLAG;
+    }
+    
+    // Check if block is allocated
+    private static boolean isBlockAllocated(long header) {
+        return (header & HEAP_ALLOCATED_FLAG) != 0;
+    }
+    
+    // Read block header at given address
+    private static long readBlockHeader(long addr) {
+        return readMemoryLong(addr);
+    }
+    
+    // Write block header at given address
+    private static void writeBlockHeader(long addr, long size, boolean allocated) {
+        long header = size;
+        if (allocated) {
+            header = header | HEAP_ALLOCATED_FLAG;
+        }
+        writeMemoryLong(addr, header);
+    }
+    
+    // Get next free block from free list (stored in data area of free block)
+    private static long getNextFree(long blockAddr) {
+        return readMemoryLong(blockAddr + HEAP_HEADER_SIZE);
+    }
+    
+    // Set next free block in free list
+    private static void setNextFree(long blockAddr, long nextAddr) {
+        writeMemoryLong(blockAddr + HEAP_HEADER_SIZE, nextAddr);
+    }
+    
+    // Extend heap by allocating new pages
+    private static boolean extendHeap(long minSize) {
+        // Calculate how many pages we need
+        long needed = minSize + HEAP_HEADER_SIZE;
+        long pagesNeeded = (needed + PAGE_SIZE - 1) / PAGE_SIZE;
         
-        long result = heapCurrent;
-        long newCurrent = heapCurrent + size;
-        
-        // Check if we need more pages
-        while (newCurrent > heapEnd) {
+        int i = 0;
+        while (i < pagesNeeded) {
             long page = allocPage();
-            if (page == 0) return 0;  // Out of memory
+            if (page == 0) return false;  // Out of memory
             
             if (!mapPage(heapEnd, page, true)) {
                 freePage(page);
-                return 0;
+                return false;
             }
             heapEnd = heapEnd + PAGE_SIZE;
+            i = i + 1;
+        }
+        return true;
+    }
+    
+    // Split a free block if it's much larger than needed
+    // Returns address of the allocated block
+    private static long splitBlock(long blockAddr, long blockSize, long neededSize) {
+        // Minimum size for a new free block (header + next pointer + some data)
+        long minSplitSize = HEAP_HEADER_SIZE + 8 + HEAP_MIN_BLOCK_SIZE;
+        
+        if (blockSize >= neededSize + minSplitSize) {
+            // Split the block
+            long remaining = blockSize - neededSize - HEAP_HEADER_SIZE;
+            long newBlockAddr = blockAddr + HEAP_HEADER_SIZE + neededSize;
+            
+            // Write header for new free block
+            writeBlockHeader(newBlockAddr, remaining, false);
+            
+            // Add new block to free list
+            setNextFree(newBlockAddr, freeListHead);
+            freeListHead = newBlockAddr;
+            heapFreeBlocks = heapFreeBlocks + 1;
+            heapTotalFree = heapTotalFree + remaining;
+            
+            // Update original block size
+            blockSize = neededSize;
         }
         
-        heapCurrent = newCurrent;
-        return result;
+        // Mark block as allocated
+        writeBlockHeader(blockAddr, blockSize, true);
+        heapTotalAllocated = heapTotalAllocated + blockSize;
+        heapTotalFree = heapTotalFree - blockSize;
+        
+        return blockAddr + HEAP_HEADER_SIZE;
+    }
+    
+    // Coalesce adjacent free blocks
+    private static void coalesce() {
+        if (freeListHead == 0) return;
+        
+        // Simple coalescing: scan through free list and merge adjacent blocks
+        // This is O(n^2) but simple and correct for a small kernel
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            long current = freeListHead;
+            long prev = 0;
+            
+            while (current != 0) {
+                long currentSize = getBlockSize(readBlockHeader(current));
+                long currentEnd = current + HEAP_HEADER_SIZE + currentSize;
+                long next = getNextFree(current);
+                
+                // Check if next block in memory is free
+                long scan = freeListHead;
+                long scanPrev = 0;
+                boolean found = false;
+                
+                while (scan != 0) {
+                    if (scan == currentEnd) {
+                        // Found adjacent block - merge
+                        long scanSize = getBlockSize(readBlockHeader(scan));
+                        long newSize = currentSize + HEAP_HEADER_SIZE + scanSize;
+                        
+                        // Remove scan from free list
+                        if (scanPrev == 0) {
+                            freeListHead = getNextFree(scan);
+                        } else {
+                            setNextFree(scanPrev, getNextFree(scan));
+                        }
+                        
+                        // Update current block size
+                        writeBlockHeader(current, newSize, false);
+                        heapTotalFree = heapTotalFree + HEAP_HEADER_SIZE;
+                        heapFreeBlocks = heapFreeBlocks - 1;
+                        
+                        changed = true;
+                        found = true;
+                        break;
+                    }
+                    scanPrev = scan;
+                    scan = getNextFree(scan);
+                }
+                
+                if (found) {
+                    // Restart scan since we modified the list
+                    break;
+                }
+                
+                prev = current;
+                current = next;
+            }
+        }
+    }
+    
+    // Allocate memory from heap using first-fit
+    private static long heapAlloc(long size) {
+        // Align to 8 bytes minimum
+        if (size < HEAP_MIN_BLOCK_SIZE) {
+            size = HEAP_MIN_BLOCK_SIZE;
+        }
+        size = (size + 7) & ~7;
+        
+        // Search free list for suitable block (first-fit)
+        long prev = 0;
+        long current = freeListHead;
+        long neededSize = size;
+        
+        while (current != 0) {
+            long header = readBlockHeader(current);
+            long blockSize = getBlockSize(header);
+            
+            if (blockSize >= neededSize) {
+                // Found suitable block - remove from free list
+                long next = getNextFree(current);
+                if (prev == 0) {
+                    freeListHead = next;
+                } else {
+                    setNextFree(prev, next);
+                }
+                heapFreeBlocks = heapFreeBlocks - 1;
+                heapTotalFree = heapTotalFree - blockSize;
+                
+                // Split if block is much larger than needed
+                return splitBlock(current, blockSize, neededSize);
+            }
+            
+            prev = current;
+            current = getNextFree(current);
+        }
+        
+        // No suitable block found - extend heap
+        long resultAddr = heapCurrent;
+        long totalNeeded = neededSize + HEAP_HEADER_SIZE;
+        
+        // Ensure we have enough mapped pages
+        while (resultAddr + totalNeeded > heapEnd) {
+            if (!extendHeap(totalNeeded)) {
+                return 0;  // Out of memory
+            }
+        }
+        
+        // Initialize block header
+        writeBlockHeader(resultAddr, neededSize, true);
+        heapCurrent = resultAddr + HEAP_HEADER_SIZE + neededSize;
+        heapTotalAllocated = heapTotalAllocated + neededSize;
+        
+        return resultAddr + HEAP_HEADER_SIZE;
+    }
+    
+    // Free memory back to heap
+    private static void heapFree(long ptr) {
+        if (ptr == 0) return;
+        
+        // Get block address (ptr points after header)
+        long blockAddr = ptr - HEAP_HEADER_SIZE;
+        long header = readBlockHeader(blockAddr);
+        long blockSize = getBlockSize(header);
+        
+        // Already free?
+        if (!isBlockAllocated(header)) {
+            return;
+        }
+        
+        // Mark as free
+        writeBlockHeader(blockAddr, blockSize, false);
+        heapTotalAllocated = heapTotalAllocated - blockSize;
+        heapTotalFree = heapTotalFree + blockSize;
+        
+        // Add to free list
+        setNextFree(blockAddr, freeListHead);
+        freeListHead = blockAddr;
+        heapFreeBlocks = heapFreeBlocks + 1;
+        
+        // Try to coalesce with adjacent blocks
+        coalesce();
+    }
+    
+    // Get heap statistics
+    private static void printHeapStats() {
+        writeString("Heap Statistics:\n");
+        writeString("  Start: 0x");
+        writeHex(HEAP_START);
+        writeString("\n");
+        writeString("  Current: 0x");
+        writeHex(heapCurrent);
+        writeString("\n");
+        writeString("  End: 0x");
+        writeHex(heapEnd);
+        writeString("\n");
+        writeString("  Total size: ");
+        writeNumber((int)(heapEnd - HEAP_START));
+        writeString(" bytes\n");
+        writeString("  Allocated: ");
+        writeNumber((int)heapTotalAllocated);
+        writeString(" bytes\n");
+        writeString("  Free: ");
+        writeNumber((int)heapTotalFree);
+        writeString(" bytes\n");
+        writeString("  Free blocks: ");
+        writeNumber(heapFreeBlocks);
+        writeString("\n");
+        writeString("  Unallocated: ");
+        writeNumber((int)(heapEnd - heapCurrent));
+        writeString(" bytes\n");
     }
     
     // ===================================================================
@@ -759,6 +1003,20 @@ public class Kernel {
         return true;
     }
     
+    // Helper to check if buffer matches "heapstat" (8 chars)
+    private static boolean isHeapstat() {
+        if (inputIndex != 8) return false;
+        if (c1 != 'h') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'a') return false;
+        if (c4 != 'p') return false;
+        if (c5 != 's') return false;
+        if (c6 != 't') return false;
+        if (c7 != 'a') return false;
+        if (c8 != 't') return false;
+        return true;
+    }
+    
     // Helper to check if buffer matches "dump" (4 chars)
     private static boolean isDump() {
         if (inputIndex != 4) return false;
@@ -1096,6 +1354,7 @@ public class Kernel {
             writeString("  time    - Show timer tick count\n");
             writeString("  mem     - Show memory statistics\n");
             writeString("  memstat - Show detailed memory stats\n");
+            writeString("  heapstat- Show heap statistics\n");
             writeString("  dump    - Dump VGA memory (0xB8000)\n");
             writeString("  vmtest  - Test virtual memory mapping\n");
             writeString("  serial  - Send test message to COM1 serial port\n");
@@ -1124,6 +1383,8 @@ public class Kernel {
             printMemoryStats();
         } else if (isMemstat()) {
             printMemoryStats();
+        } else if (isHeapstat()) {
+            printHeapStats();
         } else if (isDump()) {
             dumpMemory(0xB8000L, 5);
         } else if (isVmtest()) {
@@ -1148,7 +1409,8 @@ public class Kernel {
                 } else {
                     writeString("FAIL: Could not read boot sector\n");
                 }
-                // Note: buffer is not freed (simplified heap)
+                // Free the buffer
+                heapFree(buffer);
             }
         } else if (isPeek()) {
             long addr = parseHex(6); // After "peek "
