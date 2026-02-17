@@ -546,6 +546,27 @@ public class Kernel {
     private static final int PIT_CHANNEL0 = 0x40;
     private static final int KEYBOARD_DATA = 0x60;
     
+    // ATA PIO ports (Primary bus)
+    private static final int ATA_DATA = 0x1F0;
+    private static final int ATA_ERROR = 0x1F1;
+    private static final int ATA_SECTOR_COUNT = 0x1F2;
+    private static final int ATA_LBA_LOW = 0x1F3;
+    private static final int ATA_LBA_MID = 0x1F4;
+    private static final int ATA_LBA_HIGH = 0x1F5;
+    private static final int ATA_DRIVE_SELECT = 0x1F6;
+    private static final int ATA_STATUS = 0x1F7;
+    private static final int ATA_COMMAND = 0x1F7;
+    
+    // ATA commands
+    private static final char ATA_CMD_READ_SECTORS = 0x20;
+    private static final char ATA_CMD_WRITE_SECTORS = 0x30;
+    private static final char ATA_CMD_IDENTIFY = 0xEC;
+    
+    // ATA status bits
+    private static final char ATA_SR_BSY = 0x80;   // Busy
+    private static final char ATA_SR_DRDY = 0x40;  // Drive ready
+    private static final char ATA_SR_DRQ = 0x08;   // Data request ready
+    
     // Constants
     private static final char ICW1_ICW4 = 0x01;
     private static final char ICW1_INIT = 0x10;
@@ -759,6 +780,86 @@ public class Kernel {
         return true;
     }
     
+    private static boolean isDisktest() {
+        if (inputIndex != 8) return false;
+        if (c1 != 'd') return false;
+        if (c2 != 'i') return false;
+        if (c3 != 's') return false;
+        if (c4 != 'k') return false;
+        if (c5 != 't') return false;
+        if (c6 != 'e') return false;
+        if (c7 != 's') return false;
+        if (c8 != 't') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer starts with "peek "
+    private static boolean isPeek() {
+        if (inputIndex < 6) return false; // "peek " + at least 1 hex char
+        if (c1 != 'p') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'e') return false;
+        if (c4 != 'k') return false;
+        if (c5 != ' ') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer starts with "poke "
+    private static boolean isPoke() {
+        if (inputIndex < 8) return false; // "poke " + addr + space + value
+        if (c1 != 'p') return false;
+        if (c2 != 'o') return false;
+        if (c3 != 'k') return false;
+        if (c4 != 'e') return false;
+        if (c5 != ' ') return false;
+        return true;
+    }
+    
+    // Parse hex character to value, returns -1 if invalid
+    private static int hexCharToVal(char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+    
+    // Get character at position (1-indexed)
+    private static char getInputChar(int pos) {
+        if (pos == 1) return c1;
+        if (pos == 2) return c2;
+        if (pos == 3) return c3;
+        if (pos == 4) return c4;
+        if (pos == 5) return c5;
+        if (pos == 6) return c6;
+        if (pos == 7) return c7;
+        if (pos == 8) return c8;
+        if (pos == 9) return c9;
+        if (pos == 10) return c10;
+        if (pos == 11) return c11;
+        if (pos == 12) return c12;
+        return 0;
+    }
+    
+    // Parse hex number starting at position, returns -1 if no valid hex
+    // Stores next position in static variable parseNextPos
+    private static int parseNextPos = 0;
+    private static long parseHex(int startPos) {
+        long val = 0;
+        int pos = startPos;
+        int digits = 0;
+        while (pos <= inputIndex) {
+            char c = getInputChar(pos);
+            int v = hexCharToVal(c);
+            if (v < 0) break;
+            val = (val << 4) | v;
+            pos = pos + 1;
+            digits = digits + 1;
+        }
+        if (digits == 0) return -1;
+        parseNextPos = pos;
+        return val;
+    }
+    
     private static void writeSerialMessage(String msg) {
         if (msg == null) return;
         int i = 0;
@@ -770,7 +871,92 @@ public class Kernel {
     }
     
     // Native method for 32-bit port output (needed for ACPI shutdown)
-
+    
+    // ===================================================================
+    // ATA PIO DISK I/O
+    // ===================================================================
+    
+    // Read a 16-bit word from the ATA data port
+    private static int ataReadWord() {
+        // Read two bytes from data port and combine into a word
+        char low = inb(ATA_DATA);
+        char high = inb(ATA_DATA);
+        return ((int)high << 8) | ((int)low & 0xFF);
+    }
+    
+    // Wait until the drive is not busy
+    private static void ataWaitNotBusy() {
+        char status;
+        do {
+            status = inb(ATA_STATUS);
+        } while ((status & ATA_SR_BSY) != 0);
+    }
+    
+    // Wait until data is ready (DRQ set)
+    private static void ataWaitDataReady() {
+        char status;
+        do {
+            status = inb(ATA_STATUS);
+        } while ((status & ATA_SR_DRQ) == 0 && (status & ATA_SR_BSY) == 0);
+    }
+    
+    // Read a single sector (512 bytes) using LBA28 addressing
+    // drive: 0 = master, 1 = slave
+    private static void ataReadSector(int lba, int drive, long bufferAddr) {
+        // Wait for drive to be ready
+        ataWaitNotBusy();
+        
+        // Select drive and set upper LBA bits (bits 24-27)
+        char driveSelect = (char)(0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
+        outb(ATA_DRIVE_SELECT, driveSelect);
+        
+        // Small delay
+        ioWait();
+        
+        // Set sector count (1 sector)
+        outb(ATA_SECTOR_COUNT, (char)1);
+        
+        // Set LBA address (low, mid, high bytes)
+        outb(ATA_LBA_LOW, (char)(lba & 0xFF));
+        outb(ATA_LBA_MID, (char)((lba >> 8) & 0xFF));
+        outb(ATA_LBA_HIGH, (char)((lba >> 16) & 0xFF));
+        
+        // Send read command
+        outb(ATA_COMMAND, ATA_CMD_READ_SECTORS);
+        
+        // Wait for data to be ready
+        ataWaitNotBusy();
+        
+        // Read 256 words (512 bytes) from data port
+        int i = 0;
+        long addr = bufferAddr;
+        while (i < 256) {
+            int word = ataReadWord();
+            // Store low byte
+            writeMemory(addr, (char)(word & 0xFF));
+            // Store high byte
+            writeMemory(addr + 1, (char)((word >> 8) & 0xFF));
+            addr = addr + 2;
+            i = i + 1;
+        }
+    }
+    
+    // Read multiple sectors from disk
+    // Returns true on success, false on failure
+    private static boolean readDisk(int lba, int count, long bufferAddr) {
+        if (count <= 0) return false;
+        if (lba < 0) return false;
+        
+        int sector = 0;
+        long addr = bufferAddr;
+        while (sector < count) {
+            int currentLba = lba + sector;
+            ataReadSector(currentLba, 0, addr);
+            addr = addr + 512;
+            sector = sector + 1;
+        }
+        return true;
+    }
     
     private static void shutdown() {
         // Method 1: ACPI shutdown for QEMU (port 0x604, value 0x2000)
@@ -913,6 +1099,9 @@ public class Kernel {
             writeString("  dump    - Dump VGA memory (0xB8000)\n");
             writeString("  vmtest  - Test virtual memory mapping\n");
             writeString("  serial  - Send test message to COM1 serial port\n");
+            writeString("  disktest- Read and display boot sector\n");
+            writeString("  peek    - Read memory (e.g., peek B8000)\n");
+            writeString("  poke    - Write memory (e.g., poke B8000 1234)\n");
             writeString("  shutdown- Power off (requires isa-debug-exit)\n");
         } else if (isClear()) {
             clearScreen();
@@ -943,6 +1132,60 @@ public class Kernel {
             writeString("Sending test message to COM1 serial port...\n");
             writeSerialMessage("Hello from JavaOS Kernel via COM1!\n");
             writeString("Message sent to COM1.\n");
+        } else if (isDisktest()) {
+            writeString("Reading boot sector (LBA 0)...\n");
+            // Allocate a buffer on the heap for sector data (512 bytes)
+            long buffer = heapAlloc(512);
+            if (buffer == 0) {
+                writeString("FAIL: Could not allocate buffer\n");
+            } else {
+                boolean success = readDisk(0, 1, buffer);
+                if (success) {
+                    writeString("Boot sector read successfully.\n");
+                    writeString("First 64 bytes in hex:\n");
+                    // Dump first 64 bytes (4 lines of 16 bytes)
+                    dumpMemory(buffer, 4);
+                } else {
+                    writeString("FAIL: Could not read boot sector\n");
+                }
+                // Note: buffer is not freed (simplified heap)
+            }
+        } else if (isPeek()) {
+            long addr = parseHex(6); // After "peek "
+            if (addr < 0) {
+                writeString("Usage: peek <hexaddr>\n");
+            } else {
+                long val = readMemoryLong(addr);
+                writeString("Value at 0x");
+                writeHex(addr);
+                writeString(": 0x");
+                writeHex(val);
+                writeString("\n");
+            }
+        } else if (isPoke()) {
+            long addr = parseHex(6); // After "poke "
+            if (addr < 0) {
+                writeString("Usage: poke <hexaddr> <hexvalue>\n");
+            } else {
+                int next = parseNextPos;
+                // Skip space
+                if (next <= inputIndex && getInputChar(next) == ' ') {
+                    next = next + 1;
+                    long val = parseHex(next);
+                    if (val < 0) {
+                        writeString("Usage: poke <hexaddr> <hexvalue>\n");
+                    } else {
+                        writeMemoryLong(addr, val);
+                        writeString("Wrote 0x");
+                        writeHex(val);
+                        writeString(" to 0x");
+                        writeHex(addr);
+                        writeString("\n");
+                    }
+                } else {
+                    writeString("Usage: poke <hexaddr> <hexvalue>\n");
+                }
+            }
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }

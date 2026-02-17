@@ -3,15 +3,15 @@
 ## Translator (JavaToLLVM.java)
 - [ ] Array support (`newarray`, `iastore`, `iaload`, `arraylength`, `bastore`, `baload`, etc.)
 - [ ] Multi-class support (translate multiple .class files, resolve cross-class references)
-- [ ] `tableswitch` / `lookupswitch` opcodes (for switch statements)
+- [x] `tableswitch` / `lookupswitch` opcodes (for switch statements)
 - [x] `ineg` / `lneg` opcodes
 - [x] Constant pool `Integer` entries used by `ldc` (currently only handles strings)
 
 ## Kernel (Kernel.java)
 - [ ] Proper heap allocator with free (replace bump allocator)
-- [x] More shell commands (memstat, dump) - peek/poke pending
+- [x] More shell commands (memstat, dump, peek, poke)
 - [x] Serial port output (COM1) for better QEMU debugging
-- [ ] ATA PIO disk read support (port I/O based, implementable in Java)
+- [x] ATA PIO disk read support (port I/O based, implementable in Java)
 - [ ] Simple read-only filesystem (load data from disk)
 
 ## OS Features

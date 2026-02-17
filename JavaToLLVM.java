@@ -856,6 +856,135 @@ public class JavaToLLVM {
                     pc++; break;
                 }
 
+                // ===== Switch statements =====
+                case 0xAA: // tableswitch
+                {
+                    // Pop the switch key from stack
+                    String key = pop();
+                    
+                    // Calculate padded position (4-byte aligned after opcode)
+                    int padded = (pc + 4) & ~3;
+                    
+                    // Read operands
+                    int defaultOffset = readInt(code, padded);
+                    int low = readInt(code, padded + 4);
+                    int high = readInt(code, padded + 8);
+                    int numCases = high - low + 1;
+                    
+                    int defaultTarget = pc + defaultOffset;
+                    int fallthroughTarget = pc + opcodeLength(0xAA, code, pc);
+                    
+                    // Jump to first comparison block
+                    String firstCmpLabel = "tswitch_" + pc + "_0";
+                    emit("  br label %" + firstCmpLabel);
+                    
+                    // Generate comparison blocks for each case
+                    int currentPc = padded + 12;
+                    
+                    for (int i = 0; i < numCases; i++) {
+                        int caseValue = low + i;
+                        int offset = readInt(code, currentPc);
+                        int caseTarget = pc + offset;
+                        
+                        // Emit comparison block label
+                        emit("");
+                        emit(firstCmpLabel + ":");
+                        
+                        // Generate next label name
+                        String nextLabel;
+                        if (i == numCases - 1) {
+                            nextLabel = null; // Last case branches to default
+                        } else {
+                            nextLabel = "tswitch_" + pc + "_" + (i + 1);
+                        }
+                        
+                        // Compare key with case value
+                        String cmp = nextSSA();
+                        emit("  " + cmp + " = icmp eq i32 " + key + ", " + caseValue);
+                        
+                        // Branch to case target or next comparison/default
+                        if (nextLabel == null) {
+                            emit("  br i1 " + cmp + ", label %bb_" + caseTarget + ", label %bb_" + defaultTarget);
+                        } else {
+                            emit("  br i1 " + cmp + ", label %bb_" + caseTarget + ", label %" + nextLabel);
+                        }
+                        
+                        firstCmpLabel = nextLabel;
+                        currentPc += 4;
+                    }
+                    
+                    // Handle empty case range (edge case)
+                    if (numCases <= 0) {
+                        emit("  br label %bb_" + defaultTarget);
+                    }
+                    
+                    pc = fallthroughTarget;
+                    break;
+                }
+
+                case 0xAB: // lookupswitch
+                {
+                    // Pop the switch key from stack
+                    String key = pop();
+                    
+                    // Calculate padded position (4-byte aligned after opcode)
+                    int padded = (pc + 4) & ~3;
+                    
+                    // Read operands
+                    int defaultOffset = readInt(code, padded);
+                    int npairs = readInt(code, padded + 4);
+                    
+                    int defaultTarget = pc + defaultOffset;
+                    int fallthroughTarget = pc + opcodeLength(0xAB, code, pc);
+                    
+                    // Jump to first comparison block
+                    String firstCmpLabel = "lswitch_" + pc + "_0";
+                    emit("  br label %" + firstCmpLabel);
+                    
+                    // Generate comparison blocks for each pair
+                    int currentPc = padded + 8;
+                    
+                    for (int i = 0; i < npairs; i++) {
+                        int match = readInt(code, currentPc);
+                        int offset = readInt(code, currentPc + 4);
+                        int caseTarget = pc + offset;
+                        
+                        // Emit comparison block label
+                        emit("");
+                        emit(firstCmpLabel + ":");
+                        
+                        // Generate next label name
+                        String nextLabel;
+                        if (i == npairs - 1) {
+                            nextLabel = null; // Last case branches to default
+                        } else {
+                            nextLabel = "lswitch_" + pc + "_" + (i + 1);
+                        }
+                        
+                        // Compare key with match value
+                        String cmp = nextSSA();
+                        emit("  " + cmp + " = icmp eq i32 " + key + ", " + match);
+                        
+                        // Branch to case target or next comparison/default
+                        if (nextLabel == null) {
+                            emit("  br i1 " + cmp + ", label %bb_" + caseTarget + ", label %bb_" + defaultTarget);
+                        } else {
+                            emit("  br i1 " + cmp + ", label %bb_" + caseTarget + ", label %" + nextLabel);
+                        }
+                        
+                        firstCmpLabel = nextLabel;
+                        currentPc += 8;
+                    }
+                    
+                    // Handle empty npairs (edge case)
+                    if (npairs <= 0) {
+                        emit("  br label %bb_" + defaultTarget);
+                    }
+                    
+                    pc = fallthroughTarget;
+                    break;
+                }
+
                 default:
                     throw new RuntimeException("Unsupported opcode 0x"
                         + Integer.toHexString(op) + " at pc=" + pc
@@ -875,6 +1004,7 @@ public class JavaToLLVM {
             case 0x9F: case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4: // if_icmpXX
             case 0xC6: case 0xC7: // ifnull, ifnonnull
             case 0xA7: // goto
+            case 0xAA: case 0xAB: // tableswitch, lookupswitch
             case 0xAC: case 0xAD: case 0xAE: case 0xAF: case 0xB0: case 0xB1: // returns
                 return true;
             default:
@@ -1153,6 +1283,51 @@ public class JavaToLLVM {
                 case 0xAC: case 0xAD: case 0xAE: case 0xAF: case 0xB0: case 0xB1:
                     if (pc + 1 < code.length) starts.add(pc + 1);
                     pc++; break;
+
+                // tableswitch
+                case 0xAA:
+                {
+                    int padded = (pc + 4) & ~3;
+                    int defaultOffset = readInt(code, padded);
+                    int low = readInt(code, padded + 4);
+                    int high = readInt(code, padded + 8);
+                    int numCases = high - low + 1;
+                    
+                    starts.add(pc + defaultOffset); // default target
+                    int currentPc = padded + 12;
+                    for (int i = 0; i < numCases; i++) {
+                        int offset = readInt(code, currentPc);
+                        starts.add(pc + offset); // case target
+                        currentPc += 4;
+                    }
+                    
+                    int nextPc = pc + opcodeLength(op, code, pc);
+                    if (nextPc < code.length) starts.add(nextPc); // fallthrough
+                    pc = nextPc;
+                    break;
+                }
+
+                // lookupswitch
+                case 0xAB:
+                {
+                    int padded = (pc + 4) & ~3;
+                    int defaultOffset = readInt(code, padded);
+                    int npairs = readInt(code, padded + 4);
+                    
+                    starts.add(pc + defaultOffset); // default target
+                    int currentPc = padded + 8;
+                    for (int i = 0; i < npairs; i++) {
+                        int offset = readInt(code, currentPc + 4);
+                        starts.add(pc + offset); // case target
+                        currentPc += 8;
+                    }
+                    
+                    int nextPc = pc + opcodeLength(op, code, pc);
+                    if (nextPc < code.length) starts.add(nextPc); // fallthrough
+                    pc = nextPc;
+                    break;
+                }
+
                 default:
                     pc += opcodeLength(op, code, pc);
                     break;
@@ -1196,6 +1371,42 @@ public class JavaToLLVM {
             } else if (lastOp == 0xA7) { // goto
                 int target = lastPC + readS2(code, lastPC + 1);
                 if (preds.containsKey(target)) preds.get(target).add(blockStart);
+            } else if (lastOp == 0xAA) { // tableswitch
+                int padded = (lastPC + 4) & ~3;
+                int defaultOffset = readInt(code, padded);
+                int low = readInt(code, padded + 4);
+                int high = readInt(code, padded + 8);
+                int numCases = high - low + 1;
+                
+                // Default target
+                int defaultTarget = lastPC + defaultOffset;
+                if (preds.containsKey(defaultTarget)) preds.get(defaultTarget).add(blockStart);
+                
+                // Case targets
+                int currentPc = padded + 12;
+                for (int i = 0; i < numCases; i++) {
+                    int offset = readInt(code, currentPc);
+                    int caseTarget = lastPC + offset;
+                    if (preds.containsKey(caseTarget)) preds.get(caseTarget).add(blockStart);
+                    currentPc += 4;
+                }
+            } else if (lastOp == 0xAB) { // lookupswitch
+                int padded = (lastPC + 4) & ~3;
+                int defaultOffset = readInt(code, padded);
+                int npairs = readInt(code, padded + 4);
+                
+                // Default target
+                int defaultTarget = lastPC + defaultOffset;
+                if (preds.containsKey(defaultTarget)) preds.get(defaultTarget).add(blockStart);
+                
+                // Case targets
+                int currentPc = padded + 8;
+                for (int i = 0; i < npairs; i++) {
+                    int offset = readInt(code, currentPc + 4);
+                    int caseTarget = lastPC + offset;
+                    if (preds.containsKey(caseTarget)) preds.get(caseTarget).add(blockStart);
+                    currentPc += 8;
+                }
             } else if (isTerminator(lastOp)) {
                 // return/athrow: no successors
             } else {
