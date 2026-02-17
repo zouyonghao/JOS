@@ -1514,6 +1514,22 @@ public class Kernel {
         char magic2 = readMemoryByte(buffer + 2);
         char magic3 = readMemoryByte(buffer + 3);
         
+        // Debug: print what we read
+        writeString("  Magic read: ");
+        writeChar(magic0);
+        writeChar(magic1);
+        writeChar(magic2);
+        writeChar(magic3);
+        writeString(" (hex: ");
+        writeHexByte((int)magic0);
+        writeString(" ");
+        writeHexByte((int)magic1);
+        writeString(" ");
+        writeHexByte((int)magic2);
+        writeString(" ");
+        writeHexByte((int)magic3);
+        writeString(")\n");
+        
         if (magic0 != SFROFS_MAGIC_0 || magic1 != SFROFS_MAGIC_1 ||
             magic2 != SFROFS_MAGIC_2 || magic3 != SFROFS_MAGIC_3) {
             writeString("WARNING: No SFROFS filesystem found (invalid magic)\n");
