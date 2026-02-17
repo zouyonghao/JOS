@@ -1504,12 +1504,17 @@ public class Kernel {
             return;
         }
         
-        // Read superblock from sector 2049
+        // Test: read sector 0 (boot sector) first
+        writeString("  Testing sector 0 read...\n");
+        ataReadSectorBytes(0, 0, buffer);
+        writeString("  Sector 0 first byte: 0x");
+        writeHexByte((int)readMemoryByte(buffer));
+        writeString(" (should be 0xEA)\n");
+        
+        // Now read the actual superblock
         writeString("  Reading sector ");
         writeNumber(SFROFS_SUPERBLOCK_SECTOR);
         writeString("...\n");
-        
-        // Use byte-by-byte read to avoid alignment issues
         ataReadSectorBytes(SFROFS_SUPERBLOCK_SECTOR, 0, buffer);
         boolean success = true;
         if (!success) {
