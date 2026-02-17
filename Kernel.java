@@ -5,6 +5,17 @@ public class Kernel {
     // Low-level hardware access
     public static native char inb(int port);
     public static native void outb(int port, char data);
+    public static native void outw(int port, int data);
+    public static native void outl(int port, int data);
+    
+    // Memory access (64-bit for page tables and E820)
+    public static native long readMemoryLong(long addr);
+    public static native void writeMemoryLong(long addr, long data);
+    
+    // Paging control
+    public static native long getCR3();
+    public static native void setCR3(long val);
+    public static native void enablePaging();
     
     // Interrupt controller natives
     public static native void setIDTGate(int vector, long handlerAddr, char typeAttr);
@@ -16,6 +27,508 @@ public class Kernel {
     // Timer
     public static native long getTicks();
     public static native void incTicks();
+    
+    // ===================================================================
+    // MEMORY MANAGEMENT (All in Java!)
+    // ===================================================================
+    
+    // E820 memory map location (set up by bootloader)
+    private static final long E820_COUNT_ADDR = 0xF000L;
+    private static final long E820_BUFFER_ADDR = 0xF004L;
+    private static final int E820_ENTRY_SIZE = 24;
+    
+    // Memory types from E820
+    private static final int E820_TYPE_AVAILABLE = 1;
+    private static final int E820_TYPE_RESERVED = 2;
+    private static final int E820_TYPE_ACPI_RECLAIM = 3;
+    private static final int E820_TYPE_ACPI_NVS = 4;
+    private static final int E820_TYPE_BAD = 5;
+    
+    // Page constants
+    private static final long PAGE_SIZE = 4096;
+    private static final int PAGE_SHIFT = 12;
+    private static final long PAGE_MASK = ~(PAGE_SIZE - 1);
+    
+    // Page table constants
+    private static final long PT_PRESENT = 1L << 0;
+    private static final long PT_WRITABLE = 1L << 1;
+    private static final long PT_USER = 1L << 2;
+    private static final long PT_LARGE = 1L << 7;
+    private static final long PT_FRAME = 0x000FFFFFFFFFF000L;
+    
+    // Memory region tracking (simplified - supports up to 4GB with 128KB bitmap)
+    private static final long MAX_PHYS_MEM = 0x100000000L;  // 4GB
+    private static final int BITMAP_SIZE = (int)(MAX_PHYS_MEM / PAGE_SIZE / 8);  // 128KB
+    private static final long BITMAP_START = 0x100000L;  // Place bitmap at 1MB mark
+    private static long totalPages = 0;
+    private static long freePages = 0;
+    
+    // Use bootloader's page tables at 0x1000 (don't create new ones)
+    private static final long BOOT_PML4_ADDR = 0x1000L;   // Bootloader's PML4
+    private static final long BOOT_PDPT_ADDR = 0x2000L;   // Bootloader's PDPT  
+    private static final long BOOT_PD_ADDR = 0x3000L;     // Bootloader's PD
+    private static final long BOOT_PT_ADDR = 0x4000L;     // Bootloader's PT (first 4MB)
+    
+    // Heap starts at 4MB
+    private static final long HEAP_START = 0x400000L;
+    private static final long HEAP_SIZE = 0x400000L;      // 4MB heap
+    private static long heapCurrent = HEAP_START;
+    private static long heapEnd = HEAP_START + HEAP_SIZE;
+    
+    // ===================================================================
+    // PHYSICAL MEMORY MANAGER (Bitmap-based)
+    // ===================================================================
+    
+
+    // Parse E820 memory map and initialize bitmap
+    private static void initMemoryMap() {
+        int entryCount = (int)readMemoryLong(E820_COUNT_ADDR) & 0xFFFF;
+        
+        writeString("E820 entries: ");
+        writeNumber(entryCount);
+        writeString("\n");
+        
+        // Clear bitmap (use int offset)
+        int offset = 0;
+        while (offset < BITMAP_SIZE) {
+            writeMemoryLong(BITMAP_START + (long)offset, 0);
+            offset = offset + 8;
+        }
+        
+        // Mark kernel memory (0-4MB = pages 0-1023) as used
+        markPagesUsed(0, 0x400);
+        
+        totalPages = 0;
+        freePages = 0;
+        
+        // Parse E820 entries - use only low 32-bits, avoid long ops
+        int i = 0;
+        while (i < entryCount && i < 20) {  // Limit to 20 entries
+            long entryAddr = E820_BUFFER_ADDR + (long)(i * E820_ENTRY_SIZE);
+            
+            // Read base address (only use low 32 bits for <4GB systems)
+            long baseVal = readMemoryLong(entryAddr);
+            int baseLow = (int)baseVal;
+            
+            // Read length (only use low 32 bits)
+            long lengthVal = readMemoryLong(entryAddr + 8);
+            int lengthLow = (int)lengthVal;
+            
+            int type = (int)(readMemoryLong(entryAddr + 16) & 0xFFFFFFFFL);
+            
+            // Debug output
+            writeString("  Entry ");
+            writeNumber(i);
+            writeString(": base=0x");
+            writeHex(baseLow);
+            writeString(" len=0x");
+            writeHex(lengthLow);
+            writeString(" type=");
+            writeNumber(type);
+            writeString("\n");
+            
+            // Only handle entries with non-zero length in low 32-bits
+            if (type == E820_TYPE_AVAILABLE && lengthLow != 0) {
+                // Calculate page numbers (divide by 4096 = shift 12, done via int)
+                int startPage = (baseLow + 4095) >> 12;  // Round up
+                int endPage = (baseLow + lengthLow) >> 12;  // Round down
+                
+                // Clamp to valid range
+                if (startPage < 0x400) startPage = 0x400;  // Skip first 4MB
+                if (endPage > 0x40000) endPage = 0x40000;  // Max 256K pages = 1GB
+                
+                if (endPage > startPage) {
+                    writeString("    Adding pages ");
+                    writeNumber(startPage);
+                    writeString(" to ");
+                    writeNumber(endPage);
+                    writeString("\n");
+                    int page = startPage;
+                    while (page < endPage) {
+                        markPageFree((long)page);
+                        totalPages = totalPages + 1;
+                        freePages = freePages + 1;
+                        page = page + 1;
+                    }
+                }
+            }
+            i = i + 1;
+        }
+    }
+    
+    // Mark a single page as used in bitmap
+    private static void markPageUsed(long pageNum) {
+        long byteOffset = BITMAP_START + (pageNum >> 6);
+        int bitOffset = (int)(pageNum & 63);
+        long val = readMemoryLong(byteOffset);
+        val = val | (1L << bitOffset);
+        writeMemoryLong(byteOffset, val);
+    }
+    
+    // Mark a range of pages as used
+    private static void markPagesUsed(long startPage, long count) {
+        long i = 0;
+        while (i < count) {
+            markPageUsed(startPage + i);
+            i = i + 1;
+        }
+    }
+    
+    // Mark a single page as free in bitmap
+    private static void markPageFree(long pageNum) {
+        long byteOffset = BITMAP_START + (pageNum >> 6);
+        int bitOffset = (int)(pageNum & 63);
+        long val = readMemoryLong(byteOffset);
+        val = val & ~(1L << bitOffset);
+        writeMemoryLong(byteOffset, val);
+    }
+    
+    // Check if page is free
+    private static boolean isPageFree(long pageNum) {
+        long byteOffset = BITMAP_START + (pageNum >> 6);
+        int bitOffset = (int)(pageNum & 63);
+        long val = readMemoryLong(byteOffset);
+        boolean free = (val & (1L << bitOffset)) == 0;
+        return free;
+    }
+    
+    // Debug version
+    private static boolean isPageFreeDebug(long pageNum) {
+        long byteOffset = BITMAP_START + (pageNum >> 6);
+        int bitOffset = (int)(pageNum & 63);
+        long val = readMemoryLong(byteOffset);
+        long mask = 1L << bitOffset;
+        long masked = val & mask;
+        boolean free = masked == 0;
+        writeString("  Page ");
+        writeNumber((int)pageNum);
+        writeString(" byteOff=");
+        writeNumber((int)byteOffset);
+        writeString(" bit=");
+        writeNumber(bitOffset);
+        writeString(" mask=");
+        writeNumber((int)mask);
+        writeString(" val=");
+        writeNumber((int)val);
+        writeString(" masked=");
+        writeNumber((int)masked);
+        writeString(free ? " FREE\n" : " USED\n");
+        return free;
+    }
+    
+    // Allocate a single physical page
+    private static long allocPage() {
+        writeString("  allocPage: freePages=");
+        writeNumber(freePages);
+        writeString(" totalPages=");
+        writeNumber(totalPages);
+        writeString("\n");
+        
+        if (freePages == 0) return 0;
+        
+        // Simple first-fit search (start after kernel memory)
+        // Use int for iteration to avoid long comparisons
+        int maxPage = (int)(totalPages + 0x400);
+        if (maxPage > (int)(MAX_PHYS_MEM >> PAGE_SHIFT)) {
+            maxPage = (int)(MAX_PHYS_MEM >> PAGE_SHIFT);
+        }
+        
+        writeString("  Searching pages 0x400 to ");
+        writeNumber(maxPage);
+        writeString("\n");
+        
+        int page = 0x400;  // Start at page 1024 (4MB)
+        int checked = 0;
+        while (page < maxPage) {
+            boolean free;
+            if (checked < 3) {
+                free = isPageFreeDebug((long)page);
+                checked = checked + 1;
+            } else {
+                free = isPageFree((long)page);
+            }
+            if (free) {
+                writeString("  Found free page: ");
+                writeNumber(page);
+                writeString("\n");
+                markPageUsed((long)page);
+                freePages = freePages - 1;
+                return ((long)page) << PAGE_SHIFT;
+            }
+            page = page + 1;
+        }
+        writeString("  No free page found!\n");
+        return 0;
+    }
+    
+    // Free a physical page
+    private static void freePage(long physAddr) {
+        int pageNum = (int)(physAddr >> PAGE_SHIFT);
+        // Don't free kernel memory (pages below 0x400)
+        // Use subtraction to avoid long comparison
+        int diff = pageNum - 0x400;
+        if (diff >= 0) {
+            markPageFree((long)pageNum);
+            freePages = freePages + 1;
+        }
+    }
+    
+    // ===================================================================
+    // VIRTUAL MEMORY / PAGING
+    // ===================================================================
+    
+    // Initialize page tables for identity mapping first 4MB
+    private static void initPaging() {
+        // The bootloader already set up paging at 0x1000
+        // We just verify it's working and don't change CR3
+        // The bootloader mapped first 4MB identity
+        
+        // Verify we can read the page tables
+        long pml4Entry = readMemoryLong(BOOT_PML4_ADDR);
+        if ((pml4Entry & PT_PRESENT) == 0) {
+            writeString("ERROR: PML4 not present\n");
+        }
+    }
+    
+    // Map a virtual address to a physical address
+    private static boolean mapPage(long virtAddr, long physAddr, boolean writable) {
+        long flags = PT_PRESENT;
+        if (writable) flags = flags | PT_WRITABLE;
+        
+        // Calculate indices
+        int pml4Index = (int)((virtAddr >> 39) & 0x1FF);
+        int pdptIndex = (int)((virtAddr >> 30) & 0x1FF);
+        int pdIndex = (int)((virtAddr >> 21) & 0x1FF);
+        int ptIndex = (int)((virtAddr >> 12) & 0x1FF);
+        
+        // For now, only support first PML4 entry (maps 512GB)
+        if (pml4Index != 0) return false;
+        
+        // Get PDPT from bootloader's PML4
+        long pdptEntry = readMemoryLong(BOOT_PML4_ADDR);
+        long pdptAddr = pdptEntry & PT_FRAME;
+        
+        // Get PD from PDPT
+        long pdEntryAddr = pdptAddr + pdptIndex * 8;
+        long pdEntry = readMemoryLong(pdEntryAddr);
+        long pdAddr;
+        if ((pdEntry & PT_PRESENT) == 0) {
+            // Allocate new PD
+            pdAddr = allocPage();
+            if (pdAddr == 0) return false;
+            writeMemoryLong(pdEntryAddr, pdAddr | PT_PRESENT | PT_WRITABLE);
+            // Clear new PD
+            long jd = 0;
+            while (jd < 512) {
+                writeMemoryLong(pdAddr + jd * 8, 0);
+                jd = jd + 1;
+            }
+        } else {
+            pdAddr = pdEntry & PT_FRAME;
+        }
+        
+        // Get PT from PD
+        long ptEntryAddr = pdAddr + pdIndex * 8;
+        long ptEntry = readMemoryLong(ptEntryAddr);
+        long ptAddr;
+        if ((ptEntry & PT_PRESENT) == 0) {
+            // Allocate new PT
+            ptAddr = allocPage();
+            if (ptAddr == 0) return false;
+            writeMemoryLong(ptEntryAddr, ptAddr | PT_PRESENT | PT_WRITABLE);
+            // Clear new PT
+            long jt = 0;
+            while (jt < 512) {
+                writeMemoryLong(ptAddr + jt * 8, 0);
+                jt = jt + 1;
+            }
+        } else {
+            ptAddr = ptEntry & PT_FRAME;
+        }
+        
+        // Set page table entry
+        writeMemoryLong(ptAddr + ptIndex * 8, (physAddr & PT_FRAME) | flags);
+        return true;
+    }
+    
+    // ===================================================================
+    // HEAP ALLOCATOR (Simple bump allocator with page allocation)
+    // ===================================================================
+    
+    private static long heapAlloc(long size) {
+        // Align to 8 bytes
+        size = (size + 7) & ~7;
+        
+        long result = heapCurrent;
+        long newCurrent = heapCurrent + size;
+        
+        // Check if we need more pages
+        while (newCurrent > heapEnd) {
+            long page = allocPage();
+            if (page == 0) return 0;  // Out of memory
+            
+            if (!mapPage(heapEnd, page, true)) {
+                freePage(page);
+                return 0;
+            }
+            heapEnd = heapEnd + PAGE_SIZE;
+        }
+        
+        heapCurrent = newCurrent;
+        return result;
+    }
+    
+    // ===================================================================
+    // VIRTUAL MEMORY TEST
+    // ===================================================================
+    
+    private static void testVirtualMemory() {
+        writeString("VM Test: Allocating physical page...\n");
+        
+        // Allocate a physical page
+        long physPage = allocPage();
+        if (physPage == 0) {
+            writeString("FAIL: Could not allocate page\n");
+            return;
+        }
+        
+        writeString("  Physical page: 0x");
+        writeHex(physPage);
+        writeString("\n");
+        
+        // Map it to virtual address 0x600000 (6MB - above kernel)
+        long virtAddr = 0x600000L;
+        writeString("  Mapping to virtual: 0x");
+        writeHex(virtAddr);
+        writeString("...\n");
+        
+        if (!mapPage(virtAddr, physPage, true)) {
+            writeString("FAIL: mapPage failed\n");
+            freePage(physPage);
+            return;
+        }
+        
+        writeString("  Map successful!\n");
+        
+        // Write test pattern via virtual address
+        writeString("  Writing test pattern...\n");
+        writeMemoryLong(virtAddr, 0x123456789ABCDEF0L);
+        writeMemoryLong(virtAddr + 8, 0x0FEDCBA987654321L);
+        
+        // Read back via virtual address
+        writeString("  Reading via virtual address...\n");
+        long val1 = readMemoryLong(virtAddr);
+        long val2 = readMemoryLong(virtAddr + 8);
+        
+        writeString("  Read back: 0x");
+        writeHex(val1);
+        writeString(", 0x");
+        writeHex(val2);
+        writeString("\n");
+        
+        // Verify
+        if (val1 == 0x123456789ABCDEF0L && val2 == 0x0FEDCBA987654321L) {
+            writeString("PASS: Virtual memory works!\n");
+        } else {
+            writeString("FAIL: Data mismatch\n");
+        }
+        
+        // Cleanup
+        writeMemoryLong(virtAddr, 0);
+        writeMemoryLong(virtAddr + 8, 0);
+    }
+    
+    // Write a 64-bit value as hex
+    private static void writeHex(long val) {
+        writeString("0x");
+        int i = 60;
+        while (i >= 0) {
+            int nibble = (int)((val >> i) & 0xF);
+            char c;
+            if (nibble < 10) {
+                c = (char)('0' + nibble);
+            } else {
+                c = (char)('A' + nibble - 10);
+            }
+            writeChar(c);
+            i = i - 4;
+        }
+    }
+    
+    private static void printMemoryStats() {
+        writeString("Memory Stats:\n");
+        writeString("  Total pages: ");
+        writeNumber(totalPages);
+        writeString("\n  Free pages: ");
+        writeNumber(freePages);
+        writeString("\n  Used pages: ");
+        writeNumber(totalPages - freePages);
+        writeString("\n  Heap used: ");
+        writeNumber((heapCurrent - HEAP_START) / 1024);
+        writeString(" KB\n");
+    }
+    
+    // Static buffer for number conversion (no heap allocation)
+    private static char n1=0, n2=0, n3=0, n4=0, n5=0, n6=0, n7=0, n8=0, n9=0, n10=0;
+    private static char n11=0, n12=0, n13=0, n14=0, n15=0, n16=0, n17=0, n18=0, n19=0, n20=0;
+    
+    private static void writeNumber(long num) {
+        if (num == 0) {
+            writeChar('0');
+            return;
+        }
+        
+        int i = 0;
+        while (num > 0) {
+            char digit = (char)('0' + (num % 10));
+            if (i == 0) n1 = digit;
+            else if (i == 1) n2 = digit;
+            else if (i == 2) n3 = digit;
+            else if (i == 3) n4 = digit;
+            else if (i == 4) n5 = digit;
+            else if (i == 5) n6 = digit;
+            else if (i == 6) n7 = digit;
+            else if (i == 7) n8 = digit;
+            else if (i == 8) n9 = digit;
+            else if (i == 9) n10 = digit;
+            else if (i == 10) n11 = digit;
+            else if (i == 11) n12 = digit;
+            else if (i == 12) n13 = digit;
+            else if (i == 13) n14 = digit;
+            else if (i == 14) n15 = digit;
+            else if (i == 15) n16 = digit;
+            else if (i == 16) n17 = digit;
+            else if (i == 17) n18 = digit;
+            else if (i == 18) n19 = digit;
+            else if (i == 19) n20 = digit;
+            num = num / 10;
+            i = i + 1;
+        }
+        
+        while (i > 0) {
+            i = i - 1;
+            if (i == 0) writeChar(n1);
+            else if (i == 1) writeChar(n2);
+            else if (i == 2) writeChar(n3);
+            else if (i == 3) writeChar(n4);
+            else if (i == 4) writeChar(n5);
+            else if (i == 5) writeChar(n6);
+            else if (i == 6) writeChar(n7);
+            else if (i == 7) writeChar(n8);
+            else if (i == 8) writeChar(n9);
+            else if (i == 9) writeChar(n10);
+            else if (i == 10) writeChar(n11);
+            else if (i == 11) writeChar(n12);
+            else if (i == 12) writeChar(n13);
+            else if (i == 13) writeChar(n14);
+            else if (i == 14) writeChar(n15);
+            else if (i == 15) writeChar(n16);
+            else if (i == 16) writeChar(n17);
+            else if (i == 17) writeChar(n18);
+            else if (i == 18) writeChar(n19);
+            else if (i == 19) writeChar(n20);
+        }
+    }
 
     private static final int SCREEN_WIDTH = 80;
     private static final int SCREEN_HEIGHT = 25;
@@ -188,9 +701,29 @@ public class Kernel {
         return true;
     }
     
+    // Helper to check if buffer matches "mem" (3 chars)
+    private static boolean isMem() {
+        if (inputIndex != 3) return false;
+        if (c1 != 'm') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'm') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "vmtest" (6 chars)
+    private static boolean isVmtest() {
+        if (inputIndex != 6) return false;
+        if (c1 != 'v') return false;
+        if (c2 != 'm') return false;
+        if (c3 != 't') return false;
+        if (c4 != 'e') return false;
+        if (c5 != 's') return false;
+        if (c6 != 't') return false;
+        return true;
+    }
+    
     // Native method for 32-bit port output (needed for ACPI shutdown)
-    public static native void outl(int port, int data);
-    public static native void outw(int port, int data);
+
     
     private static void shutdown() {
         // Method 1: ACPI shutdown for QEMU (port 0x604, value 0x2000)
@@ -252,6 +785,8 @@ public class Kernel {
             writeString("  info    - Show system information\n");
             writeString("  reboot  - Restart the system\n");
             writeString("  time    - Show timer tick count\n");
+            writeString("  mem     - Show memory statistics\n");
+            writeString("  vmtest  - Test virtual memory mapping\n");
             writeString("  shutdown- Power off (requires isa-debug-exit)\n");
         } else if (isClear()) {
             clearScreen();
@@ -270,6 +805,10 @@ public class Kernel {
             writeString("Shutting down...\n");
             shutdown();
             writeString("Shutdown failed.\n");
+        } else if (isMem()) {
+            printMemoryStats();
+        } else if (isVmtest()) {
+            testVirtualMemory();
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }
@@ -438,6 +977,19 @@ public class Kernel {
         writeString("Keyboard: enabled\n");
         writeString("Dispatch: Java\n\n");
         writeString("Type 'help' for available commands.\n\n");
+        
+        // Initialize memory management
+        writeString("Initializing memory...\n");
+        initMemoryMap();
+        writeString("Memory map parsed.\n");
+        initPaging();
+        writeString("Paging enabled.\n");
+        
+        // Run VM test automatically
+        writeString("Running VM test...\n");
+        testVirtualMemory();
+        writeString("\n");
+        
         writeString("> ");
         
         int lastTick = 0;

@@ -103,6 +103,39 @@ void Kernel_outl_Int_Int(int32_t port, int32_t data) {
   __asm__ volatile("outl %0, %w1" : : "a"(data), "d"(port16));
 }
 
+// =============================================================================
+// Memory access (64-bit)
+// =============================================================================
+
+int64_t Kernel_readMemoryLong_Long(int64_t addr) {
+  return *(int64_t*)addr;
+}
+
+void Kernel_writeMemoryLong_Long_Long(int64_t addr, int64_t data) {
+  *(int64_t*)addr = data;
+}
+
+// =============================================================================
+// Paging control
+// =============================================================================
+
+int64_t Kernel_getCR3_V(void) {
+  int64_t val;
+  __asm__ volatile("mov %%cr3, %0" : "=r"(val));
+  return val;
+}
+
+void Kernel_setCR3_Long(int64_t val) {
+  __asm__ volatile("mov %0, %%cr3" : : "r"(val));
+}
+
+void Kernel_enablePaging_V(void) {
+  int64_t cr0;
+  __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  cr0 |= 0x80000000;  // Set PG bit
+  __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
+}
+
 void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {
   (void)handlerAddr;  // Unused - we get addresses from isr_stub_table
   if (vector >= 0 && vector < 48) {

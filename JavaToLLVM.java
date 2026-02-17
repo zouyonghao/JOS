@@ -343,9 +343,17 @@ public class JavaToLLVM {
             if (llType.equals(localType)) {
                 emit("  store " + llType + " %arg." + paramSlot + ", " + llType + "* %local." + paramSlot);
             } else {
-                // Type mismatch — cast
+                // Type mismatch — cast appropriately
                 String tmp = nextSSA();
-                emit("  " + tmp + " = bitcast " + llType + " %arg." + paramSlot + " to " + localType);
+                if (llType.equals("i1") && localType.equals("i32")) {
+                    // Boolean to int: zero extend
+                    emit("  " + tmp + " = zext i1 %arg." + paramSlot + " to i32");
+                } else if (llType.equals("i32") && localType.equals("i1")) {
+                    // Int to boolean: truncate
+                    emit("  " + tmp + " = trunc i32 %arg." + paramSlot + " to i1");
+                } else {
+                    emit("  " + tmp + " = bitcast " + llType + " %arg." + paramSlot + " to " + localType);
+                }
                 emit("  store " + localType + " " + tmp + ", " + localType + "* %local." + paramSlot);
             }
             paramSlot += llType.equals("i64") ? 2 : 1;
@@ -421,6 +429,9 @@ public class JavaToLLVM {
                 case 0x12: // ldc
                     translateLdc(code[pc + 1] & 0xFF);
                     pc += 2; break;
+                case 0x13: // ldc_w
+                    translateLdc(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF));
+                    pc += 3; break;
                 case 0x14: // ldc2_w
                     translateLdc2w(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF));
                     pc += 3; break;
@@ -508,22 +519,42 @@ public class JavaToLLVM {
                     translateBinOp("sub", "i32"); pc++; break;
                 case 0x65: // lsub
                     translateBinOp("sub", "i64"); pc++; break;
+                case 0x6C: // idiv
+                    translateBinOp("sdiv", "i32"); pc++; break;
+                case 0x6D: // ldiv
+                    translateBinOp("sdiv", "i64"); pc++; break;
+                case 0x70: // irem
+                    translateBinOp("srem", "i32"); pc++; break;
+                case 0x71: // lrem
+                    translateBinOp("srem", "i64"); pc++; break;
                 case 0x68: // imul
                     translateBinOp("mul", "i32"); pc++; break;
                 case 0x69: // lmul
                     translateBinOp("mul", "i64"); pc++; break;
                 case 0x7E: // iand
                     translateBinOp("and", "i32"); pc++; break;
+                case 0x7F: // land
+                    translateBinOp("and", "i64"); pc++; break;
                 case 0x80: // ior
                     translateBinOp("or", "i32"); pc++; break;
+                case 0x81: // lor
+                    translateBinOp("or", "i64"); pc++; break;
                 case 0x82: // ixor
                     translateBinOp("xor", "i32"); pc++; break;
+                case 0x83: // lxor
+                    translateBinOp("xor", "i64"); pc++; break;
                 case 0x78: // ishl
                     translateBinOp("shl", "i32"); pc++; break;
+                case 0x79: // lshl
+                    translateBinOp("shl", "i64"); pc++; break;
                 case 0x7A: // ishr
                     translateBinOp("ashr", "i32"); pc++; break;
+                case 0x7B: // lshr
+                    translateBinOp("ashr", "i64"); pc++; break;
                 case 0x7C: // iushr
                     translateBinOp("lshr", "i32"); pc++; break;
+                case 0x7D: // lushr
+                    translateBinOp("lshr", "i64"); pc++; break;
 
                 // ===== Type conversions =====
                 case 0x85: // i2l
@@ -610,6 +641,23 @@ public class JavaToLLVM {
                     translateIfIcmp("sgt", pc, readS2(code, pc + 1)); pc += 3; break;
                 case 0xA4: // if_icmple
                     translateIfIcmp("sle", pc, readS2(code, pc + 1)); pc += 3; break;
+
+                // ===== Long comparison =====
+                case 0x94: // lcmp
+                {
+                    String b = pop();
+                    String a = pop();
+                    String cmpEq = nextSSA();
+                    String cmpLt = nextSSA();
+                    String sel1 = nextSSA();
+                    String sel2 = nextSSA();
+                    emit("  " + cmpEq + " = icmp eq i64 " + a + ", " + b);
+                    emit("  " + cmpLt + " = icmp slt i64 " + a + ", " + b);
+                    emit("  " + sel1 + " = select i1 " + cmpLt + ", i32 -1, i32 1");
+                    emit("  " + sel2 + " = select i1 " + cmpEq + ", i32 0, i32 " + sel1);
+                    push(sel2, 'i');
+                    pc++; break;
+                }
 
                 // ===== Null checks =====
                 case 0xC6: // ifnull
@@ -767,7 +815,14 @@ public class JavaToLLVM {
         String llType = localTypeToLLVM(localTypes[idx]);
         String r = nextSSA();
         emit("  " + r + " = load " + llType + ", " + llType + "* %local." + idx);
-        push(r, 'i');
+        // If loading boolean (i1), zext to i32 for Java stack
+        if (llType.equals("i1")) {
+            String ext = nextSSA();
+            emit("  " + ext + " = zext i1 " + r + " to i32");
+            push(ext, 'i');
+        } else {
+            push(r, 'i');
+        }
     }
 
     static void translateLload(int idx) {
@@ -785,6 +840,12 @@ public class JavaToLLVM {
     static void translateIstore(int idx, char[] localTypes) {
         String val = pop();
         String llType = localTypeToLLVM(localTypes[idx]);
+        // If storing to boolean (i1) but value is i32, convert it
+        if (llType.equals("i1")) {
+            String cmp = nextSSA();
+            emit("  " + cmp + " = icmp ne i32 " + val + ", 0");
+            val = cmp;
+        }
         emit("  store " + llType + " " + val + ", " + llType + "* %local." + idx);
     }
 
@@ -801,6 +862,12 @@ public class JavaToLLVM {
     static void translateBinOp(String op, String type) {
         String b = pop();
         String a = pop();
+        // For 64-bit shifts, the shift amount (b) is int but needs to be i64 in LLVM
+        if (type.equals("i64") && (op.equals("shl") || op.equals("ashr") || op.equals("lshr"))) {
+            String bExt = nextSSA();
+            emit("  " + bExt + " = zext i32 " + b + " to i64");
+            b = bExt;
+        }
         String r = nextSSA();
         emit("  " + r + " = " + op + " " + type + " " + a + ", " + b);
         push(r, type.equals("i64") ? 'l' : 'i');
@@ -1018,6 +1085,15 @@ public class JavaToLLVM {
                 int op = code[pc] & 0xFF;
                 if (op == 0x12) { // ldc
                     int idx = code[pc + 1] & 0xFF;
+                    Object entry = cp[idx];
+                    if (entry instanceof int[]) {
+                        int[] arr = (int[]) entry;
+                        if (arr[0] == CP_STRING) {
+                            getStringConstantIndex(cpUtf8(arr[1]));
+                        }
+                    }
+                } else if (op == 0x13) { // ldc_w
+                    int idx = ((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF);
                     Object entry = cp[idx];
                     if (entry instanceof int[]) {
                         int[] arr = (int[]) entry;
