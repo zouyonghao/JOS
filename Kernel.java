@@ -1509,7 +1509,9 @@ public class Kernel {
         writeNumber(SFROFS_SUPERBLOCK_SECTOR);
         writeString("...\n");
         
-        boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        // Use byte-by-byte read to avoid alignment issues
+        ataReadSectorBytes(SFROFS_SUPERBLOCK_SECTOR, 0, buffer);
+        boolean success = true;
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
@@ -1725,6 +1727,28 @@ public class Kernel {
         char low = inb(ATA_DATA);
         char high = inb(ATA_DATA);
         return ((int)high << 8) | ((int)low & 0xFF);
+    }
+    
+    // Alternative: read byte by byte
+    private static void ataReadSectorBytes(int lba, int drive, long bufferAddr) {
+        ataWaitNotBusy();
+        char driveSelect = (char)(0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
+        outb(ATA_DRIVE_SELECT, driveSelect);
+        ioWait();
+        outb(ATA_SECTOR_COUNT, (char)1);
+        outb(ATA_LBA_LOW, (char)(lba & 0xFF));
+        outb(ATA_LBA_MID, (char)((lba >> 8) & 0xFF));
+        outb(ATA_LBA_HIGH, (char)((lba >> 16) & 0x0F));
+        outb(ATA_COMMAND, ATA_CMD_READ_SECTORS);
+        ataWaitNotBusy();
+        ataWaitDataReady();
+        
+        // Read 512 bytes one at a time
+        int i = 0;
+        while (i < 512) {
+            writeMemory(bufferAddr + i, inb(ATA_DATA));
+            i = i + 1;
+        }
     }
     
     // Wait until the drive is not busy
