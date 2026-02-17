@@ -896,21 +896,35 @@ public class JavaToLLVM {
     }
 
     static void translateIfIcmp(String cond, int pc, int offset) {
-        String b = pop();
-        String a = pop();
+        char typeB = stackTypes.pop();
+        String b = stack.pop();
+        char typeA = stackTypes.pop();
+        String a = stack.pop();
         int target = pc + offset;
         int fallthrough = pc + 3;
         String cmp = nextSSA();
-        emit("  " + cmp + " = icmp " + cond + " i32 " + a + ", " + b);
+        // Use i64 if either operand is long, otherwise i32
+        if (typeA == 'l' || typeB == 'l') {
+            emit("  " + cmp + " = icmp " + cond + " i64 " + a + ", " + b);
+        } else {
+            emit("  " + cmp + " = icmp " + cond + " i32 " + a + ", " + b);
+        }
         emit("  br i1 " + cmp + ", label %bb_" + target + ", label %bb_" + fallthrough);
     }
 
     static void translateIfZero(String cond, int pc, int offset) {
-        String a = pop();
+        char type = stackTypes.pop();
+        String a = stack.pop();
         int target = pc + offset;
         int fallthrough = pc + 3;
         String cmp = nextSSA();
-        emit("  " + cmp + " = icmp " + cond + " i32 " + a + ", 0");
+        if (type == 'l') {
+            // Long comparison - use i64
+            emit("  " + cmp + " = icmp " + cond + " i64 " + a + ", 0");
+        } else {
+            // Int comparison - use i32
+            emit("  " + cmp + " = icmp " + cond + " i32 " + a + ", 0");
+        }
         emit("  br i1 " + cmp + ", label %bb_" + target + ", label %bb_" + fallthrough);
     }
 
