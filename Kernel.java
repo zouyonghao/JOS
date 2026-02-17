@@ -64,10 +64,10 @@ public class Kernel {
     private static long freePages = 0;
     
     // Use bootloader's page tables at 0x1000 (don't create new ones)
+    // Bootloader identity-maps first 128MB using 2MB huge pages in the PD
     private static final long BOOT_PML4_ADDR = 0x1000L;   // Bootloader's PML4
-    private static final long BOOT_PDPT_ADDR = 0x2000L;   // Bootloader's PDPT  
-    private static final long BOOT_PD_ADDR = 0x3000L;     // Bootloader's PD
-    private static final long BOOT_PT_ADDR = 0x4000L;     // Bootloader's PT (first 4MB)
+    private static final long BOOT_PDPT_ADDR = 0x2000L;   // Bootloader's PDPT
+    private static final long BOOT_PD_ADDR = 0x3000L;     // Bootloader's PD (2MB huge pages)
     
     // Heap starts at 4MB
     private static final long HEAP_START = 0x400000L;

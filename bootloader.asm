@@ -120,22 +120,20 @@ boot:
 
 	pop di
 
-	movw [di], PAGE_TABLE_BUFFER_TEMP + 0x1003	   
+	movw [di], PAGE_TABLE_BUFFER_TEMP + 0x1003
 	# &PML4T[0] = PAGE_TABLE_BUFFER_TEMP + 0x0000, PML4T[0] = &PDPT | 0x03
-	movw [di + 0x1000], PAGE_TABLE_BUFFER_TEMP + 0x2003 
+	movw [di + 0x1000], PAGE_TABLE_BUFFER_TEMP + 0x2003
 	# &PDPT[0] = PAGE_TABLE_BUFFER_TEMP + 0x1000, PDPT[0] = &PDT | 0x03
-	movw [di + 0x2000], PAGE_TABLE_BUFFER_TEMP + 0x3003 
-	# &PDT[0] = PAGE_TABLE_BUFFER_TEMP + 0x2000, PDT[0] = &PT | 0x03
-	mov di, PAGE_TABLE_BUFFER_TEMP + 0x3000		
-	# &PT[0] = PAGE_TABLE_BUFFER_TEMP + 0x3000
-	mov ax, 0x03
+
+	# Use 2MB huge pages in PDT to identity-map first 128MB
+	# Each PDT entry: physAddr | 0x83 (Present + Writable + PageSize)
+	mov di, PAGE_TABLE_BUFFER_TEMP + 0x2000
+	mov eax, 0x83		# first 2MB page with PS=1, RW=1, P=1
 .pagesLoop:
-	# &PT[0] = PAGE_TABLE_BUFFER_TEMP + 0x3000
-	#  PT[i] = (0x1000 * i) | 0x03
-	mov [di], eax	      # identity map pages
-	add eax, 0x1000
+	mov [di], eax
+	add eax, 0x200000	# next 2MB page
 	add di, 8
-	cmp di, PAGE_TABLE_BUFFER_TEMP + 0x4000
+	cmp di, PAGE_TABLE_BUFFER_TEMP + 0x2000 + (64 * 8)	# 64 entries = 128MB
 	jl .pagesLoop
 
 	mov al, 0xFF

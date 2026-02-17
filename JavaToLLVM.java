@@ -41,6 +41,12 @@ public class JavaToLLVM {
     static Deque<String> stack = new ArrayDeque<>();
     static Deque<Character> stackTypes = new ArrayDeque<>();
 
+    // ===== Per-block stack tracking for phi node generation =====
+    static Map<Integer, List<String>> blockExitStacks;
+    static Map<Integer, List<Character>> blockExitStackTypes;
+    static Map<Integer, Set<Integer>> predecessorMap;
+    static int currentBlockStart;
+
     // ===== Inner types =====
     static class FieldInfo {
         String name, descriptor;
@@ -387,17 +393,48 @@ public class JavaToLLVM {
     static void translateMethod(MethodInfo m, char[] localTypes, String retType) {
         byte[] code = m.code;
         Set<Integer> blockStarts = discoverBasicBlocks(code);
+        predecessorMap = buildPredecessorMap(code, blockStarts);
+        blockExitStacks = new HashMap<>();
+        blockExitStackTypes = new HashMap<>();
+        currentBlockStart = -1;
         lastWasTerminator = true; // entry br is a terminator
 
         int pc = 0;
         while (pc < code.length) {
             if (blockStarts.contains(pc)) {
+                // Save exit stack of the block we just finished
+                if (currentBlockStart >= 0) {
+                    blockExitStacks.put(currentBlockStart, snapshotStack());
+                    blockExitStackTypes.put(currentBlockStart, snapshotStackTypes());
+                }
+
                 // Insert fall-through branch if previous block didn't end with terminator
                 if (!lastWasTerminator) {
                     emit("  br label %bb_" + pc);
                 }
                 emit("bb_" + pc + ":");
                 lastWasTerminator = false;
+                currentBlockStart = pc;
+
+                // Compute entry stack for this block
+                Set<Integer> preds = predecessorMap.get(pc);
+                if (preds != null && preds.size() > 1) {
+                    // Merge block: emit phi nodes
+                    emitPhiNodes(pc);
+                } else if (preds != null && preds.size() == 1) {
+                    // Single predecessor: restore its exit stack
+                    int pred = preds.iterator().next();
+                    if (blockExitStacks.containsKey(pred)) {
+                        restoreStack(blockExitStacks.get(pred), blockExitStackTypes.get(pred));
+                    } else {
+                        stack.clear();
+                        stackTypes.clear();
+                    }
+                } else {
+                    // Entry block or unreachable
+                    stack.clear();
+                    stackTypes.clear();
+                }
             }
 
             int op = code[pc] & 0xFF;
@@ -1109,6 +1146,64 @@ public class JavaToLLVM {
     }
 
     // =========================================================================
+    // Predecessor map construction (for phi node generation)
+    // =========================================================================
+
+    static Map<Integer, Set<Integer>> buildPredecessorMap(byte[] code, Set<Integer> blockStarts) {
+        Map<Integer, Set<Integer>> preds = new HashMap<>();
+        for (int start : blockStarts) {
+            preds.put(start, new LinkedHashSet<>());
+        }
+
+        Integer[] sortedStarts = blockStarts.toArray(new Integer[0]);
+        Arrays.sort(sortedStarts);
+
+        for (int bi = 0; bi < sortedStarts.length; bi++) {
+            int blockStart = sortedStarts[bi];
+            int blockEnd = (bi + 1 < sortedStarts.length) ? sortedStarts[bi + 1] : code.length;
+
+            // Find the last instruction in this block
+            int lastPC = blockStart;
+            int tmpPC = blockStart;
+            while (tmpPC < blockEnd) {
+                lastPC = tmpPC;
+                tmpPC += opcodeLength(code[tmpPC] & 0xFF, code, tmpPC);
+            }
+
+            int lastOp = code[lastPC] & 0xFF;
+
+            if (isConditionalBranch(lastOp)) {
+                int target = lastPC + readS2(code, lastPC + 1);
+                int fallthrough = lastPC + 3;
+                if (preds.containsKey(target)) preds.get(target).add(blockStart);
+                if (preds.containsKey(fallthrough)) preds.get(fallthrough).add(blockStart);
+            } else if (lastOp == 0xA7) { // goto
+                int target = lastPC + readS2(code, lastPC + 1);
+                if (preds.containsKey(target)) preds.get(target).add(blockStart);
+            } else if (isTerminator(lastOp)) {
+                // return/athrow: no successors
+            } else {
+                // Fall-through to next block
+                if (bi + 1 < sortedStarts.length) {
+                    preds.get(sortedStarts[bi + 1]).add(blockStart);
+                }
+            }
+        }
+        return preds;
+    }
+
+    static boolean isConditionalBranch(int op) {
+        switch (op) {
+            case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: // ifXX
+            case 0x9F: case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4: // if_icmpXX
+            case 0xC6: case 0xC7: // ifnull, ifnonnull
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // =========================================================================
     // String constant collection (first pass)
     // =========================================================================
 
@@ -1167,6 +1262,111 @@ public class JavaToLLVM {
 
     static String nextSSA() {
         return "%" + (ssaCounter++);
+    }
+
+    // =========================================================================
+    // Per-block stack save/restore and phi node emission
+    // =========================================================================
+
+    static List<String> snapshotStack() {
+        return new ArrayList<>(stack); // top-first order
+    }
+
+    static List<Character> snapshotStackTypes() {
+        return new ArrayList<>(stackTypes);
+    }
+
+    static void restoreStack(List<String> values, List<Character> types) {
+        stack.clear();
+        stackTypes.clear();
+        // Push bottom-to-top (reverse of saved top-first order)
+        for (int i = values.size() - 1; i >= 0; i--) {
+            stack.push(values.get(i));
+            stackTypes.push(types.get(i));
+        }
+    }
+
+    static String typeCharToLLVM(char type) {
+        switch (type) {
+            case 'l': return "i64";
+            case 'p': return "i8*";
+            default:  return "i32";
+        }
+    }
+
+    /** Emit phi nodes at a merge block and set up the operand stack. */
+    static void emitPhiNodes(int blockPC) {
+        Set<Integer> preds = predecessorMap.get(blockPC);
+        if (preds == null || preds.size() < 2) return;
+
+        // Collect exit stacks from processed predecessors only
+        List<Integer> availablePreds = new ArrayList<>();
+        for (int pred : preds) {
+            if (blockExitStacks.containsKey(pred)) {
+                availablePreds.add(pred);
+            }
+        }
+        if (availablePreds.size() < 2) {
+            // Not enough predecessors processed — use single predecessor path
+            if (availablePreds.size() == 1) {
+                restoreStack(blockExitStacks.get(availablePreds.get(0)),
+                             blockExitStackTypes.get(availablePreds.get(0)));
+            } else {
+                stack.clear();
+                stackTypes.clear();
+            }
+            return;
+        }
+
+        int depth = blockExitStacks.get(availablePreds.get(0)).size();
+        // Verify consistent stack depth
+        for (int pred : availablePreds) {
+            if (blockExitStacks.get(pred).size() != depth) {
+                // Inconsistent stack depth — clear and skip
+                stack.clear();
+                stackTypes.clear();
+                return;
+            }
+        }
+
+        stack.clear();
+        stackTypes.clear();
+
+        if (depth == 0) return; // Empty stacks — no phi needed
+
+        // Process stack slots from bottom (index depth-1) to top (index 0)
+        // so that push order yields correct final stack
+        for (int slot = depth - 1; slot >= 0; slot--) {
+            String firstValue = blockExitStacks.get(availablePreds.get(0)).get(slot);
+            char firstType = blockExitStackTypes.get(availablePreds.get(0)).get(slot);
+
+            // Check if all predecessors have the same value for this slot
+            boolean allSame = true;
+            for (int pi = 1; pi < availablePreds.size(); pi++) {
+                if (!firstValue.equals(blockExitStacks.get(availablePreds.get(pi)).get(slot))) {
+                    allSame = false;
+                    break;
+                }
+            }
+
+            if (allSame) {
+                push(firstValue, firstType);
+            } else {
+                // Emit phi node
+                String llType = typeCharToLLVM(firstType);
+                String phiSSA = nextSSA();
+                StringBuilder phiInst = new StringBuilder();
+                phiInst.append("  ").append(phiSSA).append(" = phi ").append(llType).append(" ");
+                for (int pi = 0; pi < availablePreds.size(); pi++) {
+                    if (pi > 0) phiInst.append(", ");
+                    String val = blockExitStacks.get(availablePreds.get(pi)).get(slot);
+                    int predBlock = availablePreds.get(pi);
+                    phiInst.append("[ ").append(val).append(", %bb_").append(predBlock).append(" ]");
+                }
+                emit(phiInst.toString());
+                push(phiSSA, firstType);
+            }
+        }
     }
 
     // =========================================================================
