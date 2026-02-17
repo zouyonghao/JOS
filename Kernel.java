@@ -1501,6 +1501,9 @@ public class Kernel {
         }
         
         // Read superblock from sector 1 (data disk drive 1)
+        writeString("  Reading sector ");
+        writeNumber(SFROFS_SUPERBLOCK_SECTOR);
+        writeString(" from drive 1...\n");
         boolean success = readDataDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
@@ -1513,6 +1516,16 @@ public class Kernel {
         char magic1 = readMemoryByte(buffer + 1);
         char magic2 = readMemoryByte(buffer + 2);
         char magic3 = readMemoryByte(buffer + 3);
+        
+        // Debug: print first 16 bytes of buffer
+        writeString("  Buffer bytes: ");
+        int j = 0;
+        while (j < 16) {
+            writeHexByte((int)readMemoryByte(buffer + j));
+            writeString(" ");
+            j = j + 1;
+        }
+        writeString("\n");
         
         // Debug: print what we read
         writeString("  Magic read: ");
@@ -1748,7 +1761,9 @@ public class Kernel {
         outb(ATA_LBA_HIGH, (char)((lba >> 16) & 0xFF));
         outb(ATA_COMMAND, ATA_CMD_READ_SECTORS);
         
+        // Wait for command to complete and data to be ready
         ataWaitNotBusy();
+        ataWaitDataReady();
         
         int i = 0;
         long addr = bufferAddr;
