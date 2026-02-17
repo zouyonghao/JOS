@@ -1559,8 +1559,8 @@ public class Kernel {
             return;
         }
         
-        // Read number of files
-        fsNumFiles = readUInt16(buffer, 5);
+        // Read number of files (at offset 8: after magic[4] + version[1] + padding[3])
+        fsNumFiles = readUInt16(buffer, 8);
         if (fsNumFiles > SFROFS_MAX_FILES) {
             writeString("WARNING: Too many files, limiting to ");
             writeNumber(SFROFS_MAX_FILES);
@@ -1568,8 +1568,8 @@ public class Kernel {
             fsNumFiles = SFROFS_MAX_FILES;
         }
         
-        // Read files start sector
-        fsFilesStartSector = readUInt32(buffer, 7);
+        // Read files start sector (at offset 10: after num_files[2])
+        fsFilesStartSector = readUInt32(buffer, 10);
         
         writeString("  SFROFS v");
         writeNumber(version);
