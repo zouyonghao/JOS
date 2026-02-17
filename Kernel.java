@@ -1500,11 +1500,17 @@ public class Kernel {
             return;
         }
         
-        // Read superblock from sector 1 (data disk drive 1)
+        // Read superblock from sector 2049
         writeString("  Reading sector ");
         writeNumber(SFROFS_SUPERBLOCK_SECTOR);
-        writeString(" from drive 0...\n");
+        writeString("...\n");
+        
+        // Try reading twice (workaround for ATA timing issues)
         boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        if (!success || readMemoryByte(buffer) == 0) {
+            writeString("  Retry read...\n");
+            success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        }
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
