@@ -1,0 +1,64 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Cache apt packages
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt/archives
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/build.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          openjdk-17-jdk \
+          clang \
+          lld \
+          qemu-system-x86 \
+          make \
+          python3 \
+          python3-pip
+        java -version
+        clang --version
+        qemu-system-x86_64 --version
+    
+    - name: Build kernel
+      run: |
+        make clean
+        make
+    
+    - name: Run tests
+      run: |
+        python3 test/run_tests.py --kernel build/BB.bin --no-color
+    
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-binary
+        path: build/BB.bin
+        retention-days: 7
+    
+    - name: Upload test logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs
+        path: |
+          qemu_debug.log
+          serial.log
+        retention-days: 3

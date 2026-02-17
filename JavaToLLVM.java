@@ -24,12 +24,24 @@ public class JavaToLLVM {
                      CP_METHOD_HANDLE = 15, CP_METHOD_TYPE = 16,
                      CP_INVOKE_DYNAMIC = 18;
 
-    // ===== Parsed class data =====
-    static Object[] cp;
-    static int cpCount;
-    static String className;
-    static List<FieldInfo> fields = new ArrayList<>();
-    static List<MethodInfo> methods = new ArrayList<>();
+    // ===== Multi-class support: per-class data =====
+    static class ClassInfo {
+        String name;
+        Object[] cp;
+        int cpCount;
+        List<FieldInfo> fields = new ArrayList<>();
+        List<MethodInfo> methods = new ArrayList<>();
+    }
+    
+    static Map<String, ClassInfo> classes = new LinkedHashMap<>();
+    static ClassInfo currentClass;  // Currently being processed
+    
+    // Backward-compatible accessors
+    static Object[] cp() { return currentClass.cp; }
+    static int cpCount() { return currentClass.cpCount; }
+    static String className() { return currentClass.name; }
+    static List<FieldInfo> fields() { return currentClass.fields; }
+    static List<MethodInfo> methods() { return currentClass.methods; }
 
     // ===== LLVM IR generation state =====
     static StringBuilder out = new StringBuilder();
@@ -75,16 +87,57 @@ public class JavaToLLVM {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("Usage: java JavaToLLVM <input.class> <output.ll>");
+            System.err.println("Usage: java JavaToLLVM <input.class> [<input2.class> ...] <output.ll>");
+            System.err.println("       java JavaToLLVM <input-directory/> <output.ll>");
             System.exit(1);
         }
-        parseClassFile(args[0]);
+        
+        String outputFile = args[args.length - 1];
+        List<String> inputFiles = new ArrayList<>();
+        
+        // Process input arguments (all except last)
+        for (int i = 0; i < args.length - 1; i++) {
+            String arg = args[i];
+            if (arg.endsWith("/") || arg.endsWith("\\")) {
+                // Directory input - find all .class files
+                File dir = new File(arg);
+                if (dir.isDirectory()) {
+                    File[] classFiles = dir.listFiles((d, name) -> name.endsWith(".class"));
+                    if (classFiles != null) {
+                        for (File f : classFiles) {
+                            inputFiles.add(f.getPath());
+                        }
+                    }
+                } else {
+                    System.err.println("Warning: Not a directory: " + arg);
+                }
+            } else {
+                // Single class file
+                inputFiles.add(arg);
+            }
+        }
+        
+        if (inputFiles.isEmpty()) {
+            System.err.println("Error: No input .class files found");
+            System.exit(1);
+        }
+        
+        // Parse all class files
+        for (String path : inputFiles) {
+            parseClassFile(path);
+        }
+        
+        // Generate LLVM IR for all classes
         generateLLVM();
-        try (FileWriter fw = new FileWriter(args[1])) {
+        
+        try (FileWriter fw = new FileWriter(outputFile)) {
             fw.write(out.toString());
         }
-        System.out.println("Generated " + args[1] + " (" + out.length() + " chars, "
-            + methods.size() + " methods, " + stringConstants.size() + " string constants)");
+        
+        int totalMethods = classes.values().stream().mapToInt(c -> c.methods.size()).sum();
+        System.out.println("Generated " + outputFile + " (" + out.length() + " chars, "
+            + classes.size() + " classes, " + totalMethods + " methods, " 
+            + stringConstants.size() + " string constants)");
     }
 
     // =========================================================================
@@ -92,10 +145,14 @@ public class JavaToLLVM {
     // =========================================================================
 
     static void parseClassFile(String path) throws Exception {
+        // Create new ClassInfo for this class
+        ClassInfo info = new ClassInfo();
+        currentClass = info;
+        
         try (DataInputStream dis = new DataInputStream(
                 new BufferedInputStream(new FileInputStream(path)))) {
             int magic = dis.readInt();
-            if (magic != 0xCAFEBABE) throw new RuntimeException("Not a class file");
+            if (magic != 0xCAFEBABE) throw new RuntimeException("Not a class file: " + path);
             dis.readUnsignedShort(); // minor version
             dis.readUnsignedShort(); // major version
 
@@ -103,7 +160,7 @@ public class JavaToLLVM {
 
             dis.readUnsignedShort(); // access flags
             int thisClass = dis.readUnsignedShort();
-            className = resolveClassName(thisClass);
+            info.name = resolveClassName(thisClass);
             dis.readUnsignedShort(); // super class
             int ifaceCount = dis.readUnsignedShort();
             for (int i = 0; i < ifaceCount; i++) dis.readUnsignedShort();
@@ -111,11 +168,16 @@ public class JavaToLLVM {
             readFields(dis);
             readMethods(dis);
         }
+        
+        // Store the class info
+        classes.put(info.name, info);
     }
 
     static void readConstantPool(DataInputStream dis) throws Exception {
-        cpCount = dis.readUnsignedShort();
-        cp = new Object[cpCount];
+        int cpCount = dis.readUnsignedShort();
+        currentClass.cpCount = cpCount;
+        currentClass.cp = new Object[cpCount];
+        Object[] cp = currentClass.cp;
         for (int i = 1; i < cpCount; i++) {
             int tag = dis.readUnsignedByte();
             switch (tag) {
@@ -172,7 +234,7 @@ public class JavaToLLVM {
                 int len = dis.readInt();
                 dis.skipBytes(len);
             }
-            fields.add(f);
+            currentClass.fields.add(f);
         }
     }
 
@@ -208,7 +270,7 @@ public class JavaToLLVM {
                     dis.skipBytes(attrLen);
                 }
             }
-            methods.add(m);
+            currentClass.methods.add(m);
         }
     }
 
@@ -217,27 +279,37 @@ public class JavaToLLVM {
     // =========================================================================
 
     static String cpUtf8(int index) {
-        return (String) cp[index];
+        return (String) cp()[index];
     }
 
     static String resolveClassName(int classIndex) {
-        int[] entry = (int[]) cp[classIndex];
+        int[] entry = (int[]) cp()[classIndex];
         return cpUtf8(entry[1]).replace('/', '_');
     }
 
     static String resolveClassNameRaw(int classIndex) {
-        int[] entry = (int[]) cp[classIndex];
+        int[] entry = (int[]) cp()[classIndex];
         return cpUtf8(entry[1]);
     }
 
-    /** Resolve a Fieldref or Methodref to [className, name, descriptor] */
+    /** Resolve a Fieldref or Methodref from current class's constant pool to [className, name, descriptor] */
     static String[] resolveRef(int refIndex) {
-        int[] ref = (int[]) cp[refIndex];
-        String cls = resolveClassNameRaw(ref[1]);
-        int[] nat = (int[]) cp[ref[2]];
-        String name = cpUtf8(nat[1]);
-        String desc = cpUtf8(nat[2]);
+        return resolveRefFromClass(currentClass, refIndex);
+    }
+    
+    /** Resolve a Fieldref or Methodref from a specific class's constant pool */
+    static String[] resolveRefFromClass(ClassInfo clsInfo, int refIndex) {
+        int[] ref = (int[]) clsInfo.cp[refIndex];
+        String cls = resolveClassNameRawFromClass(clsInfo, ref[1]);
+        int[] nat = (int[]) clsInfo.cp[ref[2]];
+        String name = (String) clsInfo.cp[nat[1]];
+        String desc = (String) clsInfo.cp[nat[2]];
         return new String[]{cls, name, desc};
+    }
+    
+    static String resolveClassNameRawFromClass(ClassInfo clsInfo, int classIndex) {
+        int[] entry = (int[]) clsInfo.cp[classIndex];
+        return (String) clsInfo.cp[entry[1]];
     }
 
     // =========================================================================
@@ -250,36 +322,49 @@ public class JavaToLLVM {
         globalsOut.setLength(0);
         atTopDeclarations.clear();
         ssaCounter = 0;
+        externFunctions.clear();
+        mallocRegistered = false;
         
-        // First pass: collect all string constants from all methods
+        // First pass: collect all string constants from all classes and methods
         collectStringConstants();
 
         // Phase 1: Emit module header to globalsOut first (so it ends up at the top)
-        emitAtTop("; ModuleID = '" + className + "'");
-        emitAtTop("source_filename = \"" + className + ".java\"");
+        emitAtTop("; ModuleID = 'JOS_MultiClass'");
+        emitAtTop("source_filename = \"multi-class.java\"");
         emitAtTop("target triple = \"x86_64-unknown-linux-gnu\"");
         emitAtTop("");
         
-        // Phase 2: Emit string constants and static fields to out
+        // Phase 2: Emit string constants to out
         emitStringConstants();
-        emitStaticFields();
         
-        // Phase 3: Emit functions (this collects array storage globals into globalsOut)
-        for (MethodInfo m : methods) {
-            if ((m.accessFlags & 0x0100) != 0) { // ACC_NATIVE
-                String mangledName = mangleName(className, m.name, m.descriptor);
-                String retType = returnTypeFromDescriptor(m.descriptor);
-                List<String[]> params = parseParams(m.descriptor);
-                registerExtern(retType, mangledName, params);
+        // Phase 3: Emit static fields for all classes
+        for (ClassInfo cls : classes.values()) {
+            emitStaticFields(cls);
+        }
+        
+        // Phase 4: Register externs for native methods in all classes
+        for (ClassInfo cls : classes.values()) {
+            currentClass = cls;
+            for (MethodInfo m : cls.methods) {
+                if ((m.accessFlags & 0x0100) != 0) { // ACC_NATIVE
+                    String mangledName = mangleName(cls.name, m.name, m.descriptor);
+                    String retType = returnTypeFromDescriptor(m.descriptor);
+                    List<String[]> params = parseParams(m.descriptor);
+                    registerExtern(retType, mangledName, params);
+                }
             }
         }
         
-        for (MethodInfo m : methods) {
-            if (m.name.equals("<init>")) continue;
-            if ((m.accessFlags & 0x0100) != 0) continue;
-            if (m.code == null) continue;
-            emitFunction(m);
-            emit("");
+        // Phase 5: Emit functions for all classes
+        for (ClassInfo cls : classes.values()) {
+            currentClass = cls;
+            for (MethodInfo m : cls.methods) {
+                if (m.name.equals("<init>")) continue;
+                if ((m.accessFlags & 0x0100) != 0) continue;
+                if (m.code == null) continue;
+                emitFunction(m);
+                emit("");
+            }
         }
         
         emitExternDeclarations();
@@ -289,10 +374,7 @@ public class JavaToLLVM {
     }
 
     static void emitModuleHeader() {
-        emit("; ModuleID = '" + className + "'");
-        emit("source_filename = \"" + className + ".java\"");
-        emit("target triple = \"x86_64-unknown-linux-gnu\"");
-        emit("");
+        // Deprecated - header is now emitted in generateLLVM
     }
 
     static void emitStringConstants() {
@@ -310,15 +392,17 @@ public class JavaToLLVM {
         emit("");
     }
 
-    static void emitStaticFields() {
-        emit("; ====== Static Fields ======");
-        for (FieldInfo f : fields) {
+    static void emitStaticFields(ClassInfo cls) {
+        if (cls.fields.isEmpty()) return;
+        emit("; ====== Static Fields: " + cls.name + " ======");
+        for (FieldInfo f : cls.fields) {
             if ((f.accessFlags & 0x0008) == 0) continue; // only static
             if ((f.accessFlags & 0x0010) != 0) continue; // skip final constants (inlined by javac)
             String llType = descriptorToLLVMType(f.descriptor);
-            String globalName = "@" + className + "_" + f.name;
+            String globalName = "@" + cls.name + "_" + f.name;
             emit(globalName + " = dso_local global " + llType + " " + defaultValue(llType));
         }
+        emit("");
     }
 
     static Set<String> externFunctions = new LinkedHashSet<>();
@@ -339,7 +423,7 @@ public class JavaToLLVM {
         stack.clear();
         stackTypes.clear();
 
-        String mangledName = mangleName(className, m.name, m.descriptor);
+        String mangledName = mangleName(className(), m.name, m.descriptor);
         String retType = returnTypeFromDescriptor(m.descriptor);
         List<String[]> params = parseParams(m.descriptor);
 
@@ -387,12 +471,12 @@ public class JavaToLLVM {
             paramSlot += llType.equals("i64") ? 2 : 1;
         }
 
-        // If this is startKernel, insert clinit call
+        // If this is startKernel, insert clinit call for this class
         if (m.name.equals("startKernel")) {
-            // Check if clinit exists
-            for (MethodInfo mm : methods) {
+            // Check if clinit exists in current class
+            for (MethodInfo mm : methods()) {
                 if (mm.name.equals("<clinit>") && mm.code != null) {
-                    emit("  call void @" + className + "_clinit_V()");
+                    emit("  call void @" + className() + "_clinit_V()");
                     break;
                 }
             }
@@ -1377,7 +1461,7 @@ public class JavaToLLVM {
     }
 
     static void translateLdc(int cpIdx) {
-        Object entry = cp[cpIdx];
+        Object entry = cp()[cpIdx];
         if (entry instanceof Integer) {
             push(String.valueOf((int) entry), 'i');
         } else if (entry instanceof int[]) {
@@ -1397,7 +1481,7 @@ public class JavaToLLVM {
     }
 
     static void translateLdc2w(int cpIdx) {
-        Object entry = cp[cpIdx];
+        Object entry = cp()[cpIdx];
         if (entry instanceof Long) {
             push(String.valueOf((long) entry), 'l');
         }
@@ -1457,8 +1541,8 @@ public class JavaToLLVM {
             emit(call.toString());
         }
 
-        // Register as extern if not in our class
-        if (!cls.equals(className)) {
+        // Register as extern if not in current class
+        if (!cls.equals(className())) {
             registerExtern(retType, mangledName, params);
         }
     }
@@ -1700,32 +1784,35 @@ public class JavaToLLVM {
     // =========================================================================
 
     static void collectStringConstants() {
-        for (MethodInfo m : methods) {
-            if (m.code == null) continue;
-            byte[] code = m.code;
-            int pc = 0;
-            while (pc < code.length) {
-                int op = code[pc] & 0xFF;
-                if (op == 0x12) { // ldc
-                    int idx = code[pc + 1] & 0xFF;
-                    Object entry = cp[idx];
-                    if (entry instanceof int[]) {
-                        int[] arr = (int[]) entry;
-                        if (arr[0] == CP_STRING) {
-                            getStringConstantIndex(cpUtf8(arr[1]));
+        for (ClassInfo cls : classes.values()) {
+            currentClass = cls;
+            for (MethodInfo m : cls.methods) {
+                if (m.code == null) continue;
+                byte[] code = m.code;
+                int pc = 0;
+                while (pc < code.length) {
+                    int op = code[pc] & 0xFF;
+                    if (op == 0x12) { // ldc
+                        int idx = code[pc + 1] & 0xFF;
+                        Object entry = cp()[idx];
+                        if (entry instanceof int[]) {
+                            int[] arr = (int[]) entry;
+                            if (arr[0] == CP_STRING) {
+                                getStringConstantIndex(cpUtf8(arr[1]));
+                            }
+                        }
+                    } else if (op == 0x13) { // ldc_w
+                        int idx = ((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF);
+                        Object entry = cp()[idx];
+                        if (entry instanceof int[]) {
+                            int[] arr = (int[]) entry;
+                            if (arr[0] == CP_STRING) {
+                                getStringConstantIndex(cpUtf8(arr[1]));
+                            }
                         }
                     }
-                } else if (op == 0x13) { // ldc_w
-                    int idx = ((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF);
-                    Object entry = cp[idx];
-                    if (entry instanceof int[]) {
-                        int[] arr = (int[]) entry;
-                        if (arr[0] == CP_STRING) {
-                            getStringConstantIndex(cpUtf8(arr[1]));
-                        }
-                    }
+                    pc += opcodeLength(op, code, pc);
                 }
-                pc += opcodeLength(op, code, pc);
             }
         }
     }
@@ -2195,7 +2282,9 @@ public class JavaToLLVM {
         // but before or at the first function definition
         
         // Look for the clinit function entry - we want to insert globals BEFORE it
-        int clinitPos = output.indexOf("define dso_local void @" + className + "_clinit_");
+        // Note: currentClass should be set when this is called
+        if (currentClass == null) return -1;
+        int clinitPos = output.indexOf("define dso_local void @" + currentClass.name + "_clinit_");
         if (clinitPos >= 0) {
             // Insert globals right before the clinit function
             return clinitPos;

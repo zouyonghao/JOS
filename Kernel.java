@@ -951,6 +951,9 @@ public class Kernel {
     private static boolean isPoke() { return inputStartsWith("poke "); }
     private static boolean isWatch() { return inputStartsWith("watch "); }
     private static boolean isUnwatch() { return inputStartsWith("unwatch "); }
+    private static boolean isLs() { return inputEquals("ls"); }
+    private static boolean isCat() { return inputStartsWith("cat "); }
+    private static boolean isStat() { return inputStartsWith("stat "); }
     
     // Get character at position (1-indexed for compatibility with old code)
     private static char getInputChar(int pos) {
@@ -1169,6 +1172,309 @@ public class Kernel {
     }
     
     // ===================================================================
+    // SIMPLE FLAT READ-ONLY FILESYSTEM (SFROFS)
+    // ===================================================================
+    
+    // SFROFS constants
+    private static final int SFROFS_SECTOR_SIZE = 512;
+    private static final int SFROFS_SUPERBLOCK_SECTOR = 1;
+    private static final int SFROFS_MAGIC_0 = 'S';  // S
+    private static final int SFROFS_MAGIC_1 = 'F';  // F
+    private static final int SFROFS_MAGIC_2 = 'R';  // R
+    private static final int SFROFS_MAGIC_3 = 'O';  // O
+    private static final int SFROFS_VERSION = 1;
+    
+    // File entry size: 48 (name) + 4 (start) + 4 (size) + 8 (reserved) = 64 bytes
+    private static final int SFROFS_ENTRY_SIZE = 64;
+    private static final int SFROFS_NAME_MAX = 48;
+    private static final int SFROFS_MAX_FILES = 32;  // Maximum files we support
+    
+    // Filesystem state - using static arrays only (no 'new' operator)
+    private static int fsNumFiles = 0;
+    private static int fsFilesStartSector = 0;
+    private static int fsInitialized = 0;
+    
+    // File metadata stored in parallel arrays
+    // Filenames: flat array of 32 x 48 chars
+    private static char[] fsFileNames = new char[SFROFS_MAX_FILES * SFROFS_NAME_MAX];
+    private static int[] fsFileNameLengths = new int[SFROFS_MAX_FILES];
+    private static int[] fsFileStartSectors = new int[SFROFS_MAX_FILES];
+    private static int[] fsFileSizes = new int[SFROFS_MAX_FILES];
+    
+    // Read a byte from memory address
+    private static char readMemoryByte(long addr) {
+        return (char)(readMemoryLong(addr) & 0xFFL);
+    }
+    
+    // Read uint32 from buffer at offset
+    private static int readUInt32(long bufferAddr, int offset) {
+        long addr = bufferAddr + offset;
+        char b0 = readMemoryByte(addr);
+        char b1 = readMemoryByte(addr + 1);
+        char b2 = readMemoryByte(addr + 2);
+        char b3 = readMemoryByte(addr + 3);
+        return ((int)b0 & 0xFF) | 
+               (((int)b1 & 0xFF) << 8) | 
+               (((int)b2 & 0xFF) << 16) | 
+               (((int)b3 & 0xFF) << 24);
+    }
+    
+    // Read uint16 from buffer at offset
+    private static int readUInt16(long bufferAddr, int offset) {
+        long addr = bufferAddr + offset;
+        char b0 = readMemoryByte(addr);
+        char b1 = readMemoryByte(addr + 1);
+        return ((int)b0 & 0xFF) | (((int)b1 & 0xFF) << 8);
+    }
+    
+    // Get pointer to filename at given index
+    private static int fsNameIdx(int fileIdx) {
+        return fileIdx * SFROFS_NAME_MAX;
+    }
+    
+    // Read null-terminated string from buffer at offset into filesystem name storage
+    private static int readFilename(long bufferAddr, int offset, int fileIdx) {
+        int nameBase = fsNameIdx(fileIdx);
+        int len = 0;
+        int i = 0;
+        while (i < SFROFS_NAME_MAX) {
+            char c = readMemoryByte(bufferAddr + offset + i);
+            if (c == 0) break;
+            fsFileNames[nameBase + i] = c;
+            len = len + 1;
+            i = i + 1;
+        }
+        return len;
+    }
+    
+    // Compare filename in input buffer with stored filename
+    private static boolean filenameEqualsInput(int fileIdx, int startPos, int len) {
+        if (len != fsFileNameLengths[fileIdx]) return false;
+        int nameBase = fsNameIdx(fileIdx);
+        int i = 0;
+        while (i < len) {
+            if (inputBuffer[startPos + i] != fsFileNames[nameBase + i]) return false;
+            i = i + 1;
+        }
+        return true;
+    }
+    
+    // Find a file by comparing input buffer directly
+    private static int findFileByInput(int startPos, int len) {
+        if (fsInitialized == 0) return -1;
+        int i = 0;
+        while (i < fsNumFiles) {
+            if (filenameEqualsInput(i, startPos, len)) {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+    
+    // Initialize the filesystem
+    private static void initFilesystem() {
+        writeString("Initializing filesystem...\n");
+        
+        // Allocate buffer for superblock (1 sector)
+        long buffer = heapAlloc(SFROFS_SECTOR_SIZE);
+        if (buffer == 0) {
+            writeString("ERROR: Could not allocate buffer for superblock\n");
+            return;
+        }
+        
+        // Read superblock from sector 1
+        boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        if (!success) {
+            writeString("ERROR: Could not read superblock\n");
+            heapFree(buffer);
+            return;
+        }
+        
+        // Verify magic number
+        char magic0 = readMemoryByte(buffer);
+        char magic1 = readMemoryByte(buffer + 1);
+        char magic2 = readMemoryByte(buffer + 2);
+        char magic3 = readMemoryByte(buffer + 3);
+        
+        if (magic0 != SFROFS_MAGIC_0 || magic1 != SFROFS_MAGIC_1 ||
+            magic2 != SFROFS_MAGIC_2 || magic3 != SFROFS_MAGIC_3) {
+            writeString("WARNING: No SFROFS filesystem found (invalid magic)\n");
+            heapFree(buffer);
+            return;
+        }
+        
+        // Read version
+        int version = (int)readMemoryByte(buffer + 4);
+        if (version != SFROFS_VERSION) {
+            writeString("ERROR: Unsupported SFROFS version\n");
+            heapFree(buffer);
+            return;
+        }
+        
+        // Read number of files
+        fsNumFiles = readUInt16(buffer, 5);
+        if (fsNumFiles > SFROFS_MAX_FILES) {
+            writeString("WARNING: Too many files, limiting to ");
+            writeNumber(SFROFS_MAX_FILES);
+            writeString("\n");
+            fsNumFiles = SFROFS_MAX_FILES;
+        }
+        
+        // Read files start sector
+        fsFilesStartSector = readUInt32(buffer, 7);
+        
+        writeString("  SFROFS v");
+        writeNumber(version);
+        writeString(" detected, ");
+        writeNumber(fsNumFiles);
+        writeString(" files\n");
+        
+        heapFree(buffer);
+        
+        if (fsNumFiles == 0) {
+            fsInitialized = 1;
+            return;
+        }
+        
+        // Calculate file table sectors (sector 2 to N)
+        int tableBytes = fsNumFiles * SFROFS_ENTRY_SIZE;
+        int tableSectors = (tableBytes + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
+        
+        // Allocate buffer for file table
+        long tableBuffer = heapAlloc(tableSectors * SFROFS_SECTOR_SIZE);
+        if (tableBuffer == 0) {
+            writeString("ERROR: Could not allocate buffer for file table\n");
+            return;
+        }
+        
+        // Read file table from sector 2
+        success = readDisk(2, tableSectors, tableBuffer);
+        if (!success) {
+            writeString("ERROR: Could not read file table\n");
+            heapFree(tableBuffer);
+            return;
+        }
+        
+        // Parse file entries
+        int i = 0;
+        while (i < fsNumFiles) {
+            long entryAddr = tableBuffer + (i * SFROFS_ENTRY_SIZE);
+            
+            // Read filename
+            fsFileNameLengths[i] = readFilename(entryAddr, 0, i);
+            fsFileStartSectors[i] = readUInt32(entryAddr, 48);
+            fsFileSizes[i] = readUInt32(entryAddr, 52);
+            
+            i = i + 1;
+        }
+        
+        heapFree(tableBuffer);
+        fsInitialized = 1;
+        writeString("  Filesystem initialized\n");
+    }
+    
+    // Display file contents by index
+    private static void catFileByIdx(int idx) {
+        if (idx < 0 || idx >= fsNumFiles) return;
+        int size = fsFileSizes[idx];
+        int startSector = fsFileStartSectors[idx];
+        
+        if (size == 0) {
+            writeString("(empty file)\n");
+            return;
+        }
+        
+        // Allocate buffer for file
+        long buffer = heapAlloc(size);
+        if (buffer == 0) {
+            writeString("ERROR: Could not allocate buffer\n");
+            return;
+        }
+        
+        // Read file data
+        int sectors = (size + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
+        boolean success = readDisk(startSector, sectors, buffer);
+        if (!success) {
+            writeString("ERROR: Could not read file\n");
+            heapFree(buffer);
+            return;
+        }
+        
+        // Display contents
+        int i = 0;
+        while (i < size) {
+            char c = readMemoryByte(buffer + i);
+            writeChar(c);
+            i = i + 1;
+        }
+        writeChar('\n');
+        
+        heapFree(buffer);
+    }
+    
+    // Show file info by index
+    private static void statFileByIdx(int idx) {
+        if (idx < 0 || idx >= fsNumFiles) return;
+        writeString("File: ");
+        // Print filename char by char
+        int nameBase = fsNameIdx(idx);
+        int i = 0;
+        while (i < fsFileNameLengths[idx]) {
+            writeChar(fsFileNames[nameBase + i]);
+            i = i + 1;
+        }
+        writeString("\n");
+        writeString("  Size: ");
+        writeNumber(fsFileSizes[idx]);
+        writeString(" bytes\n");
+        writeString("  Sectors: ");
+        writeNumber((fsFileSizes[idx] + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE);
+        writeString(" (start: ");
+        writeNumber(fsFileStartSectors[idx]);
+        writeString(")\n");
+    }
+    
+    // List all files
+    private static void listFiles() {
+        if (fsInitialized == 0) {
+            writeString("Filesystem not initialized\n");
+            return;
+        }
+        if (fsNumFiles == 0) {
+            writeString("No files on disk\n");
+            return;
+        }
+        writeString("Files (");
+        writeNumber(fsNumFiles);
+        writeString(" total):\n");
+        writeString("  NAME                              SIZE\n");
+        writeString("  --------------------------------  --------\n");
+        int i = 0;
+        while (i < fsNumFiles) {
+            writeString("  ");
+            // Print filename
+            int nameBase = fsNameIdx(i);
+            int j = 0;
+            while (j < fsFileNameLengths[i]) {
+                writeChar(fsFileNames[nameBase + j]);
+                j = j + 1;
+            }
+            // Pad to 32 chars
+            int pad = 32 - fsFileNameLengths[i];
+            if (pad < 0) pad = 0;
+            j = 0;
+            while (j < pad) {
+                writeChar(' ');
+                j = j + 1;
+            }
+            writeNumber(fsFileSizes[i]);
+            writeString(" bytes\n");
+            i = i + 1;
+        }
+    }
+    
+    // ===================================================================
     // ATA PIO DISK I/O
     // ===================================================================
     
@@ -1369,6 +1675,9 @@ public class Kernel {
             writeString("  watch     - Watch memory address (e.g., watch B8000)\n");
             writeString("  unwatch   - Stop watching address\n");
             writeString("  watchlist - Show watched addresses and values\n");
+            writeString("  ls        - List files on disk\n");
+            writeString("  cat       - Display file contents (e.g., cat readme.txt)\n");
+            writeString("  stat      - Show file info (e.g., stat readme.txt)\n");
             writeString("  shutdown  - Power off\n");
         } else if (isClear()) {
             clearScreen();
@@ -1470,6 +1779,55 @@ public class Kernel {
             }
         } else if (isWatchlist()) {
             showWatchlist();
+        } else if (isLs()) {
+            listFiles();
+        } else if (isCat()) {
+            // Extract filename after "cat " and find matching file
+            int pos = 4;
+            while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
+            if (pos >= inputIndex) {
+                writeString("Usage: cat <filename>\n");
+            } else {
+                // Get filename length
+                int nameStart = pos;
+                int nameLen = inputIndex - nameStart;
+                // Find file by comparing input buffer to stored filenames
+                int fileIdx = findFileByInput(nameStart, nameLen);
+                if (fileIdx < 0) {
+                    writeString("File not found: ");
+                    // Print the filename chars directly
+                    int p = nameStart;
+                    while (p < inputIndex) {
+                        writeChar(inputBuffer[p]);
+                        p = p + 1;
+                    }
+                    writeString("\n");
+                } else {
+                    catFileByIdx(fileIdx);
+                }
+            }
+        } else if (isStat()) {
+            // Extract filename after "stat "
+            int pos = 5;
+            while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
+            if (pos >= inputIndex) {
+                writeString("Usage: stat <filename>\n");
+            } else {
+                int nameStart = pos;
+                int nameLen = inputIndex - nameStart;
+                int fileIdx = findFileByInput(nameStart, nameLen);
+                if (fileIdx < 0) {
+                    writeString("File not found: ");
+                    int p = nameStart;
+                    while (p < inputIndex) {
+                        writeChar(inputBuffer[p]);
+                        p = p + 1;
+                    }
+                    writeString("\n");
+                } else {
+                    statFileByIdx(fileIdx);
+                }
+            }
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }
@@ -1645,6 +2003,10 @@ public class Kernel {
         // Run VM test automatically
         writeString("Running VM test...\n");
         testVirtualMemory();
+        writeString("\n");
+        
+        // Initialize filesystem
+        initFilesystem();
         writeString("\n");
         
         writeString("> ");
