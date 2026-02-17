@@ -15,12 +15,13 @@
 - [x] Simple read-only filesystem (load data from disk)
 
 ## OS Features
+- [x] Preemptive multithreading (kernel threads, round-robin scheduler, timer-driven context switch)
+- [x] Thread management syscalls (yield, getpid, exit with cleanup)
+- [x] Shell `ps` command (list active threads with TID and state)
+- [x] Simple binary loader (load user programs from disk)
 - [ ] User mode (ring 3) with syscall/sysret interface
 - [ ] Process abstraction (per-process page tables, register save/restore)
-- [ ] Cooperative or preemptive scheduling (timer-driven context switch)
-- [x] Simple binary loader (load user programs from disk)
 - [ ] ELF loader (proper ELF format support)
-- [ ] User mode (ring 3) with syscall/sysret interface
 
 ## Infrastructure
 - [x] Automated test harness (boot QEMU, capture serial output, check for PASS/FAIL)
