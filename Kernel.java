@@ -28,6 +28,9 @@ public class Kernel {
     public static native long getTicks();
     public static native void incTicks();
     
+    // Serial output
+    public static native void writeSerial(char c);
+    
     // ===================================================================
     // MEMORY MANAGEMENT (All in Java!)
     // ===================================================================
@@ -722,6 +725,50 @@ public class Kernel {
         return true;
     }
     
+    // Helper to check if buffer matches "memstat" (7 chars)
+    private static boolean isMemstat() {
+        if (inputIndex != 7) return false;
+        if (c1 != 'm') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'm') return false;
+        if (c4 != 's') return false;
+        if (c5 != 't') return false;
+        if (c6 != 'a') return false;
+        if (c7 != 't') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "dump" (4 chars)
+    private static boolean isDump() {
+        if (inputIndex != 4) return false;
+        if (c1 != 'd') return false;
+        if (c2 != 'u') return false;
+        if (c3 != 'm') return false;
+        if (c4 != 'p') return false;
+        return true;
+    }
+    
+    private static boolean isSerial() {
+        if (inputIndex != 6) return false;
+        if (c1 != 's') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'r') return false;
+        if (c4 != 'i') return false;
+        if (c5 != 'a') return false;
+        if (c6 != 'l') return false;
+        return true;
+    }
+    
+    private static void writeSerialMessage(String msg) {
+        if (msg == null) return;
+        int i = 0;
+        int len = msg.length();
+        while (i < len) {
+            writeSerial(msg.charAt(i));
+            i = i + 1;
+        }
+    }
+    
     // Native method for 32-bit port output (needed for ACPI shutdown)
 
     
@@ -773,6 +820,82 @@ public class Kernel {
         else if (inputIndex == 11) c12 = 0;
     }
     
+    // Write a byte as 2-digit hex (for memory dump)
+    private static void writeHexByte(int val) {
+        int nibbleHigh = (val >> 4) & 0xF;
+        int nibbleLow = val & 0xF;
+        char cHigh;
+        char cLow;
+        if (nibbleHigh < 10) {
+            cHigh = (char)('0' + nibbleHigh);
+        } else {
+            cHigh = (char)('A' + nibbleHigh - 10);
+        }
+        if (nibbleLow < 10) {
+            cLow = (char)('0' + nibbleLow);
+        } else {
+            cLow = (char)('A' + nibbleLow - 10);
+        }
+        writeChar(cHigh);
+        writeChar(cLow);
+    }
+    
+    // Write a 32-bit value as 8-digit hex (for addresses)
+    private static void writeHexLong32(long val) {
+        int i = 28;
+        while (i >= 0) {
+            int nibble = (int)((val >> i) & 0xF);
+            char c;
+            if (nibble < 10) {
+                c = (char)('0' + nibble);
+            } else {
+                c = (char)('A' + nibble - 10);
+            }
+            writeChar(c);
+            i = i - 4;
+        }
+    }
+    
+    // Dump memory at given address for specified number of lines
+    private static void dumpMemory(long addr, int lines) {
+        int line = 0;
+        while (line < lines) {
+            long lineAddr = addr + (line * 16L);
+            
+            // Print address
+            writeHexLong32(lineAddr);
+            writeString(": ");
+            
+            // Read and print 16 bytes in hex
+            int i = 0;
+            while (i < 16) {
+                long byteAddr = lineAddr + i;
+                // Read as a char (byte) from memory
+                char b = (char)(readMemoryLong(byteAddr) & 0xFFL);
+                writeHexByte((int)b);
+                writeChar(' ');
+                i = i + 1;
+            }
+            
+            // Print ASCII representation
+            writeString(" |");
+            i = 0;
+            while (i < 16) {
+                long byteAddr = lineAddr + i;
+                char b = (char)(readMemoryLong(byteAddr) & 0xFFL);
+                if (b >= 32 && b <= 126) {
+                    writeChar(b);
+                } else {
+                    writeChar('.');
+                }
+                i = i + 1;
+            }
+            writeString("|\n");
+            
+            line = line + 1;
+        }
+    }
+    
     private static void executeCommand() {
         writeChar('\n');
         
@@ -786,7 +909,10 @@ public class Kernel {
             writeString("  reboot  - Restart the system\n");
             writeString("  time    - Show timer tick count\n");
             writeString("  mem     - Show memory statistics\n");
+            writeString("  memstat - Show detailed memory stats\n");
+            writeString("  dump    - Dump VGA memory (0xB8000)\n");
             writeString("  vmtest  - Test virtual memory mapping\n");
+            writeString("  serial  - Send test message to COM1 serial port\n");
             writeString("  shutdown- Power off (requires isa-debug-exit)\n");
         } else if (isClear()) {
             clearScreen();
@@ -807,8 +933,16 @@ public class Kernel {
             writeString("Shutdown failed.\n");
         } else if (isMem()) {
             printMemoryStats();
+        } else if (isMemstat()) {
+            printMemoryStats();
+        } else if (isDump()) {
+            dumpMemory(0xB8000L, 5);
         } else if (isVmtest()) {
             testVirtualMemory();
+        } else if (isSerial()) {
+            writeString("Sending test message to COM1 serial port...\n");
+            writeSerialMessage("Hello from JavaOS Kernel via COM1!\n");
+            writeString("Message sent to COM1.\n");
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }

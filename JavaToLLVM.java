@@ -592,6 +592,22 @@ public class JavaToLLVM {
                     translateBinOp("lshr", "i32"); pc++; break;
                 case 0x7D: // lushr
                     translateBinOp("lshr", "i64"); pc++; break;
+                case 0x74: // ineg
+                {
+                    String val = pop();
+                    String r = nextSSA();
+                    emit("  " + r + " = sub i32 0, " + val);
+                    push(r, 'i');
+                    pc++; break;
+                }
+                case 0x75: // lneg
+                {
+                    String val = pop();
+                    String r = nextSSA();
+                    emit("  " + r + " = sub i64 0, " + val);
+                    push(r, 'l');
+                    pc++; break;
+                }
 
                 // ===== Type conversions =====
                 case 0x85: // i2l

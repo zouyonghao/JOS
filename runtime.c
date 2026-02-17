@@ -23,6 +23,14 @@ void Kernel_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
 }
 
 // =============================================================================
+// Native method: Kernel.writeSerial(char)
+// =============================================================================
+
+void Kernel_writeSerial_Char(int32_t c) {
+  serial_write((char)c);
+}
+
+// =============================================================================
 // String operations (plain null-terminated C strings)
 // =============================================================================
 
