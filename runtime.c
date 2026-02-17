@@ -124,6 +124,12 @@ int32_t Kernel_inb_Int(int32_t port) {
   return (int32_t)inb((uint16_t)port);
 }
 
+int32_t Kernel_inw_Int(int32_t port) {
+  uint16_t value;
+  __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"((uint16_t)port));
+  return (int32_t)value;
+}
+
 void Kernel_outb_Int_Char(int32_t port, int32_t data) {
   outb((uint16_t)port, (uint8_t)data);
 }

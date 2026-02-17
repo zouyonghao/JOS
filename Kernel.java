@@ -4,6 +4,7 @@ public class Kernel {
     
     // Low-level hardware access
     public static native char inb(int port);
+    public static native int inw(int port);
     public static native void outb(int port, char data);
     public static native void outw(int port, int data);
     public static native void outl(int port, int data);
@@ -1752,31 +1753,34 @@ public class Kernel {
         ataWaitNotBusy();
         ataWaitDataReady();
         
-        // Read first 4 bytes and print them
-        writeString("First 4 bytes: ");
-        int b0 = inb(ATA_DATA);
-        int b1 = inb(ATA_DATA);
-        int b2 = inb(ATA_DATA);
-        int b3 = inb(ATA_DATA);
-        writeHexByte(b0);
-        writeString(" ");
-        writeHexByte(b1);
-        writeString(" ");
-        writeHexByte(b2);
-        writeString(" ");
-        writeHexByte(b3);
-        writeString("\n");
-        
-        // Store them
-        writeMemory(bufferAddr, (char)b0);
-        writeMemory(bufferAddr + 1, (char)b1);
-        writeMemory(bufferAddr + 2, (char)b2);
-        writeMemory(bufferAddr + 3, (char)b3);
-        
-        // Read remaining 508 bytes
-        int i = 4;
-        while (i < 512) {
-            writeMemory(bufferAddr + i, inb(ATA_DATA));
+        // Read 256 words (512 bytes) using 16-bit reads
+        // ATA data port is 16-bit, so we need to read words and split
+        writeString("Data: ");
+        int i = 0;
+        long addr = bufferAddr;
+        while (i < 256) {
+            // Read 16-bit word from ATA data port
+            int word = inw(ATA_DATA);
+            // Split into two bytes (little endian: low byte first)
+            char low = (char)(word & 0xFF);
+            char high = (char)((word >> 8) & 0xFF);
+            writeMemory(addr, low);
+            writeMemory(addr + 1, high);
+            
+            // Print first 4 bytes
+            if (i == 0) {
+                writeHexByte((int)low);
+                writeString(" ");
+                writeHexByte((int)high);
+                writeString(" ");
+            } else if (i == 1) {
+                writeHexByte((int)low);
+                writeString(" ");
+                writeHexByte((int)high);
+                writeString("\n");
+            }
+            
+            addr = addr + 2;
             i = i + 1;
         }
     }
