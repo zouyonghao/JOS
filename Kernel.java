@@ -1181,7 +1181,7 @@ public class Kernel {
     
     // SFROFS constants
     private static final int SFROFS_SECTOR_SIZE = 512;
-    private static final int SFROFS_SUPERBLOCK_SECTOR = 2048;  // 1MB offset for filesystem
+    private static final int SFROFS_SUPERBLOCK_SECTOR = 2049;  // 1MB offset for filesystem
     private static final int SFROFS_MAGIC_0 = 'S';  // S
     private static final int SFROFS_MAGIC_1 = 'F';  // F
     private static final int SFROFS_MAGIC_2 = 'R';  // R
