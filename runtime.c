@@ -197,3 +197,14 @@ int64_t Kernel_getTicks_V(void) {
 void Kernel_incTicks_V(void) {
   timer_ticks++;
 }
+
+// =============================================================================
+// Native method: Kernel.callProgram(long entryPoint)
+// Call a loaded binary program at the given entry point
+// =============================================================================
+
+void Kernel_callProgram_Long(int64_t entryPoint) {
+  // Cast entryPoint to function pointer and call it
+  void (*prog)() = (void (*)())entryPoint;
+  prog();
+}

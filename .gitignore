@@ -21,3 +21,9 @@ screen.ppm
 serial_out.txt
 serial.log
 test/__pycache__
+
+# User program build artifacts
+user/*.o
+user/*.elf
+user/*.sbf
+user/lib/*.o

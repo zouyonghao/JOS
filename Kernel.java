@@ -31,6 +31,9 @@ public class Kernel {
     // Serial output
     public static native void writeSerial(char c);
     
+    // Program execution
+    public static native void callProgram(long entryPoint);
+    
     // ===================================================================
     // MEMORY MANAGEMENT (All in Java!)
     // ===================================================================
@@ -954,6 +957,7 @@ public class Kernel {
     private static boolean isLs() { return inputEquals("ls"); }
     private static boolean isCat() { return inputStartsWith("cat "); }
     private static boolean isStat() { return inputStartsWith("stat "); }
+    private static boolean isRun() { return inputStartsWith("run "); }
     
     // Get character at position (1-indexed for compatibility with old code)
     private static char getInputChar(int pos) {
@@ -1270,6 +1274,219 @@ public class Kernel {
             i = i + 1;
         }
         return -1;
+    }
+    
+    // Handle the cat command - extracted to avoid translator issues
+    private static void doCatCommand() {
+        int pos = 4;
+        while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
+        if (pos >= inputIndex) {
+            writeString("Usage: cat <filename>\n");
+            return;
+        }
+        int nameStart = pos;
+        int nameLen = inputIndex - nameStart;
+        int fileIdx = findFileByInput(nameStart, nameLen);
+        if (fileIdx < 0) {
+            writeString("File not found: ");
+            int p = nameStart;
+            while (p < inputIndex) {
+                writeChar(inputBuffer[p]);
+                p = p + 1;
+            }
+            writeString("\n");
+        } else {
+            catFileByIdx(fileIdx);
+        }
+    }
+    
+    // Handle the stat command - extracted to avoid translator issues
+    private static void doStatCommand() {
+        int pos = 5;
+        while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
+        if (pos >= inputIndex) {
+            writeString("Usage: stat <filename>\n");
+            return;
+        }
+        int nameStart = pos;
+        int nameLen = inputIndex - nameStart;
+        int fileIdx = findFileByInput(nameStart, nameLen);
+        if (fileIdx < 0) {
+            writeString("File not found: ");
+            int p = nameStart;
+            while (p < inputIndex) {
+                writeChar(inputBuffer[p]);
+                p = p + 1;
+            }
+            writeString("\n");
+        } else {
+            statFileByIdx(fileIdx);
+        }
+    }
+    
+    // Find file by name using char array (avoids String allocation)
+    private static int findFileByName(char[] name, int nameLen) {
+        if (fsInitialized == 0 || name == null) return -1;
+        if (nameLen <= 0 || nameLen > SFROFS_NAME_MAX) return -1;
+        int i = 0;
+        while (i < fsNumFiles) {
+            if (fsFileNameLengths[i] == nameLen) {
+                int nameBase = fsNameIdx(i);
+                int j = 0;
+                boolean match = true;
+                while (j < nameLen) {
+                    if (fsFileNames[nameBase + j] != name[j]) {
+                        match = false;
+                        break;
+                    }
+                    j = j + 1;
+                }
+                if (match) return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+    
+    // ===================================================================
+    // SIMPLE BINARY FORMAT (SBF) LOADER
+    // ===================================================================
+    
+    // SBF header constants
+    private static final int SBF_MAGIC_0 = 'S';
+    private static final int SBF_MAGIC_1 = 'B';
+    private static final int SBF_MAGIC_2 = 'F';
+    private static final int SBF_MAGIC_3 = 0;
+    
+    // Static filename buffer for loading (avoids allocation)
+    private static char[] loadFilenameBuffer = new char[SFROFS_NAME_MAX];
+    
+    // Load a simple binary program from the filesystem
+    // filename: char array containing the filename
+    // nameLen: length of the filename
+    // Returns the entry point address, or 0 on failure
+    private static long loadBinary(char[] filename, int nameLen) {
+        if (fsInitialized == 0) {
+            writeString("ERROR: Filesystem not initialized\n");
+            return 0;
+        }
+        
+        // Find file in filesystem
+        int fileIdx = findFileByName(filename, nameLen);
+        boolean found = fileIdx >= 0;
+        if (!found) {
+            writeString("ERROR: File not found: ");
+            int k = 0;
+            while (k < nameLen) {
+                writeChar(filename[k]);
+                k = k + 1;
+            }
+            writeString("\n");
+            return 0;
+        }
+        
+        int fileSize = fsFileSizes[fileIdx];
+        int startSector = fsFileStartSectors[fileIdx];
+        
+        if (fileSize < 16) {
+            writeString("ERROR: File too small to be a valid SBF\n");
+            return 0;
+        }
+        
+        // Allocate buffer for file
+        long buffer = heapAlloc(fileSize);
+        if (buffer == 0) {
+            writeString("ERROR: Could not allocate buffer for binary\n");
+            return 0;
+        }
+        
+        // Read file from disk
+        int sectors = (fileSize + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
+        boolean success = readDisk(startSector, sectors, buffer);
+        if (!success) {
+            writeString("ERROR: Could not read binary file from disk\n");
+            heapFree(buffer);
+            return 0;
+        }
+        
+        // Parse SBF header
+        char magic0 = readMemoryByte(buffer);
+        char magic1 = readMemoryByte(buffer + 1);
+        char magic2 = readMemoryByte(buffer + 2);
+        char magic3 = readMemoryByte(buffer + 3);
+        
+        if (magic0 != SBF_MAGIC_0 || magic1 != SBF_MAGIC_1 ||
+            magic2 != SBF_MAGIC_2 || magic3 != SBF_MAGIC_3) {
+            writeString("ERROR: Invalid SBF magic number\n");
+            heapFree(buffer);
+            return 0;
+        }
+        
+        int entryOffset = readUInt32(buffer, 4);
+        int codeSize = readUInt32(buffer, 8);
+        int dataSize = readUInt32(buffer, 12);
+        
+        writeString("SBF header:\n");
+        writeString("  Entry offset: ");
+        writeNumber(entryOffset);
+        writeString("\n  Code size: ");
+        writeNumber(codeSize);
+        writeString(" bytes\n  Data size: ");
+        writeNumber(dataSize);
+        writeString(" bytes\n");
+        
+        // Verify sizes make sense
+        if (16 + codeSize + dataSize > fileSize) {
+            writeString("ERROR: SBF header claims larger size than file\n");
+            heapFree(buffer);
+            return 0;
+        }
+        
+        // Allocate executable memory for code+data
+        // For now we use heap memory (which is mapped executable)
+        long execSize = codeSize + dataSize;
+        long execMem = heapAlloc(execSize);
+        if (execMem == 0) {
+            writeString("ERROR: Could not allocate executable memory\n");
+            heapFree(buffer);
+            return 0;
+        }
+        
+        // Copy code and data to executable memory
+        // Code starts at offset 16 in the file
+        long srcAddr = buffer + 16;
+        long dstAddr = execMem;
+        int copyPos = 0;
+        while (copyPos < execSize) {
+            // Read byte from source and write to destination
+            writeMemory(dstAddr + copyPos, readMemoryByte(srcAddr + copyPos));
+            copyPos = copyPos + 1;
+        }
+        
+        // Free the file buffer (we have the code/data in execMem)
+        heapFree(buffer);
+        
+        // Calculate entry point
+        long entryPoint = execMem + entryOffset;
+        
+        writeString("Binary loaded at 0x");
+        writeHex(execMem);
+        writeString(", entry point at 0x");
+        writeHex(entryPoint);
+        writeString("\n");
+        
+        return entryPoint;
+    }
+    
+    // Run a loaded program (synchronous - just call it)
+    private static void runProgram(long entryPoint) {
+        if (entryPoint == 0) {
+            writeString("ERROR: Invalid entry point\n");
+            return;
+        }
+        writeString("Jumping to program...\n");
+        callProgram(entryPoint);
+        writeString("\nProgram returned.\n");
     }
     
     // Initialize the filesystem
@@ -1678,6 +1895,7 @@ public class Kernel {
             writeString("  ls        - List files on disk\n");
             writeString("  cat       - Display file contents (e.g., cat readme.txt)\n");
             writeString("  stat      - Show file info (e.g., stat readme.txt)\n");
+            writeString("  run       - Load and run a binary (e.g., run program.bin)\n");
             writeString("  shutdown  - Power off\n");
         } else if (isClear()) {
             clearScreen();
@@ -1782,50 +2000,31 @@ public class Kernel {
         } else if (isLs()) {
             listFiles();
         } else if (isCat()) {
-            // Extract filename after "cat " and find matching file
-            int pos = 4;
-            while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
-            if (pos >= inputIndex) {
-                writeString("Usage: cat <filename>\n");
-            } else {
-                // Get filename length
-                int nameStart = pos;
-                int nameLen = inputIndex - nameStart;
-                // Find file by comparing input buffer to stored filenames
-                int fileIdx = findFileByInput(nameStart, nameLen);
-                if (fileIdx < 0) {
-                    writeString("File not found: ");
-                    // Print the filename chars directly
-                    int p = nameStart;
-                    while (p < inputIndex) {
-                        writeChar(inputBuffer[p]);
-                        p = p + 1;
-                    }
-                    writeString("\n");
-                } else {
-                    catFileByIdx(fileIdx);
-                }
-            }
+            doCatCommand();
         } else if (isStat()) {
-            // Extract filename after "stat "
-            int pos = 5;
-            while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
-            if (pos >= inputIndex) {
-                writeString("Usage: stat <filename>\n");
-            } else {
-                int nameStart = pos;
-                int nameLen = inputIndex - nameStart;
-                int fileIdx = findFileByInput(nameStart, nameLen);
-                if (fileIdx < 0) {
-                    writeString("File not found: ");
-                    int p = nameStart;
-                    while (p < inputIndex) {
-                        writeChar(inputBuffer[p]);
-                        p = p + 1;
-                    }
-                    writeString("\n");
+            doStatCommand();
+        } else if (isRun()) {
+            {
+                // Extract filename after "run "
+                int pos = 4;
+                while (pos < inputIndex && inputBuffer[pos] == ' ') pos = pos + 1;
+                if (pos >= inputIndex) {
+                    writeString("Usage: run <filename>\n");
                 } else {
-                    statFileByIdx(fileIdx);
+                    // Copy filename to static buffer (no heap allocation)
+                    int nameLen = inputIndex - pos;
+                    if (nameLen > SFROFS_NAME_MAX) nameLen = SFROFS_NAME_MAX;
+                    int i = 0;
+                    while (i < nameLen) {
+                        loadFilenameBuffer[i] = inputBuffer[pos + i];
+                        i = i + 1;
+                    }
+                    
+                    // Load and run the binary
+                    long entryPoint = loadBinary(loadFilenameBuffer, nameLen);
+                    if (entryPoint != 0) {
+                        runProgram(entryPoint);
+                    }
                 }
             }
         } else {

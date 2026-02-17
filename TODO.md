@@ -18,7 +18,9 @@
 - [ ] User mode (ring 3) with syscall/sysret interface
 - [ ] Process abstraction (per-process page tables, register save/restore)
 - [ ] Cooperative or preemptive scheduling (timer-driven context switch)
-- [ ] ELF loader (load user programs from disk into user-mode pages)
+- [x] Simple binary loader (load user programs from disk)
+- [ ] ELF loader (proper ELF format support)
+- [ ] User mode (ring 3) with syscall/sysret interface
 
 ## Infrastructure
 - [x] Automated test harness (boot QEMU, capture serial output, check for PASS/FAIL)
