@@ -1493,10 +1493,14 @@ public class Kernel {
     private static void initFilesystem() {
         writeString("Initializing filesystem...\n");
         
+        // Disable interrupts during filesystem init to prevent corruption
+        disableInterrupts();
+        
         // Allocate buffer for superblock (1 sector)
         long buffer = heapAlloc(SFROFS_SECTOR_SIZE);
         if (buffer == 0) {
             writeString("ERROR: Could not allocate buffer for superblock\n");
+            enableInterrupts();
             return;
         }
         
@@ -1514,6 +1518,7 @@ public class Kernel {
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
+            enableInterrupts();
             return;
         }
         
@@ -1553,6 +1558,7 @@ public class Kernel {
             magic2 != SFROFS_MAGIC_2 || magic3 != SFROFS_MAGIC_3) {
             writeString("WARNING: No SFROFS filesystem found (invalid magic)\n");
             heapFree(buffer);
+            enableInterrupts();
             return;
         }
         
@@ -1561,6 +1567,7 @@ public class Kernel {
         if (version != SFROFS_VERSION) {
             writeString("ERROR: Unsupported SFROFS version\n");
             heapFree(buffer);
+            enableInterrupts();
             return;
         }
         
@@ -1624,6 +1631,9 @@ public class Kernel {
         heapFree(tableBuffer);
         fsInitialized = 1;
         writeString("  Filesystem initialized\n");
+        
+        // Re-enable interrupts
+        enableInterrupts();
     }
     
     // Display file contents by index
