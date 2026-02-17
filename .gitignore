@@ -20,3 +20,4 @@ qemu_debug.log
 screen.ppm
 serial_out.txt
 serial.log
+test/__pycache__/
