@@ -1,22 +1,45 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This Java-first OS runs through our patched Graal toolchain: `Kernel.java` holds kernel entry points, `runtime.c` implements native glue, and `bootloader.asm` seeds execution. `Makefile`, `build_kernel.o.sh`, `use_graalvm.sh`, and `build_graalvm.sh` drive compilation into `obj/` artifacts and the final image `build/BB.bin`. The vendored Graal sources sit in `graal/`; temporary LLVM IR lands in `generated-llvm/` and can be purged with `make clean`.
+JOS is a bare-metal x86_64 kernel written in Java. `Kernel.java` holds all kernel logic (VGA console, interrupt handling, memory management, virtual memory, heap allocator). `JavaToLLVM.java` is a custom bytecode-to-LLVM-IR translator that replaces GraalVM. `runtime.c` implements native glue (port I/O, memory read/write, string helpers). `bootloader.asm` handles real-mode boot, E820 memory detection, paging setup, and long-mode transition. `constants.inc` defines shared assembly constants. `linker.ld` controls the memory layout. Build artifacts go to `obj/` and `build/BB.bin`; generated LLVM IR lands in `generated-llvm/`.
 
-## GraalVM Development Loop
-Kernel work often starts in `graal/`. Patch the compiler/runtime, run `./build_graalvm.sh` to rebuild Graal, then regenerate kernel objects (`./build_kernel.o.sh` or `make`) so the refreshed toolchain emits updated code.
+## Translation Pipeline
+The build compiles Java source to bytecode (`javac`), then `JavaToLLVM` translates `.class` files directly to LLVM IR (`.ll`), which `clang` compiles to object files. This avoids the complexity of GraalVM native-image. The translator supports only the bytecode subset used by `Kernel.java`: static methods/fields, primitives (int, long, char, boolean), strings, and basic control flow. It maintains a symbolic operand stack and generates SSA-form LLVM IR with phi nodes at control flow merge points.
 
-## Runtime Constraints & Known Limitations
-Graal still mishandles static Java globals that need storage, so avoid `static` `String` or array fields in kernel classes. Prefer method-scoped literals or move persistent buffers into `runtime.c`, exposing accessors and noting lifetimes in comments.
+## Key Architecture Details
+- **Paging**: Bootloader identity-maps first 128MB using 2MB huge pages in the page directory. Page tables at `0x1000` (PML4), `0x2000` (PDPT), `0x3000` (PD with huge page entries).
+- **Memory bitmap**: Starts at `0x100000` (1MB mark), tracks up to 4GB of physical pages.
+- **Page allocator**: First-fit search through bitmap, pages start at index 1024 (4MB+).
+- **Virtual memory**: `mapPage()` walks/allocates 4-level page tables to map arbitrary virtual-to-physical mappings.
+- **Heap**: Bump allocator starting at 4MB virtual, allocates physical pages and maps them on demand.
+- **Interrupts**: IDT set up in `interrupts.asm`, dispatched to `Kernel.handleInterrupt()` in Java.
 
 ## Build, Test, and Development Commands
-Run `make` (alias for `make BB.bin`) to assemble the bootable image. The standard validation loop is `make clean && make && timeout 5 make qemu`, which performs a clean rebuild and boots QEMU long enough to capture VGA output without manual shutdown. Source `./use_graalvm.sh` before invoking Graal-supplied clang or LLVM utilities directly.
+- `make` or `make BB.bin` — full build (assembler + translator + clang + link)
+- `make clean && make` — clean rebuild
+- `make qemu` — boot in QEMU with `isa-debug-exit` device (uses curses display)
+- `./build_kernel_custom.sh` — just the Java->LLVM->object pipeline
+- `javac JavaToLLVM.java && javac Kernel.java && java JavaToLLVM Kernel.class generated-llvm/Kernel.ll` — manual translator run
+- `timeout 10 make qemu` — automated boot test
+
+## Runtime Constraints & Known Limitations
+- **No objects or arrays**: The translator handles only static methods/fields and primitives. No heap-allocated Java objects, no `new`, no arrays. Use `runtime.c` native methods for buffers.
+- **No exception handling**: No try/catch/finally support.
+- **Boolean parameters**: Booleans are `i1` in function signatures but `i32` on the operand stack; the translator handles the conversion automatically.
+- **Long comparisons**: `lcmp` generates a `select` chain producing -1/0/1, then a branch. This works but is verbose.
+- **Loop phi nodes**: Back-edge phi nodes (loops with values on the operand stack across iterations) are not supported. Loops must store values to locals before the back-edge. This is the default pattern javac generates.
+
+## Design Philosophy
+Always implement functionality in Java (`Kernel.java`) whenever possible. Only fall back to `runtime.c` (C) or assembly when Java cannot express the operation — specifically for hardware I/O (`in`/`out` instructions), raw memory access, and CPU-level primitives. If a new feature can be built on top of existing native methods, write it in Java rather than adding new C code.
 
 ## Coding Style & Naming Conventions
-Use four-space indentation in Java, two spaces in C; open braces start on new lines. Java types follow UpperCamelCase with lowerCamelCase methods, and exported natives stay descriptive (`writeCharAt`, `startKernel`). C helpers use snake_case but keep Graal-generated entry points untouched. Assembly listings retain uppercase mnemonics with inline comments around column 32.
+Four-space indentation in Java, two spaces in C. Java types use UpperCamelCase with lowerCamelCase methods. Native methods declared in `Kernel.java` are implemented in `runtime.c` with mangled names (e.g., `Kernel_writeMemory_Long_Char`). Assembly uses Intel syntax with inline comments.
 
 ## Testing & Validation Guidelines
-No automated suite yet. Lean on the QEMU loop above, review `qemu_debug.log`, and add temporary assertions or serial prints when introducing runtime helpers—remove them before committing. Document manual test steps in pull requests and keep diagnostics inside `generated-llvm/` or `build/`.
+No automated test suite. Validate by booting in QEMU and checking console output. Key things to verify after changes:
+- `grep "phi" generated-llvm/Kernel.ll` — confirm phi nodes present at merge blocks
+- `clang -c generated-llvm/Kernel.ll -o /dev/null` — verify LLVM IR is valid
+- Boot in QEMU and check: memory init shows `freePages > 0`, VM test prints `PASS`, command prompt `>` appears, keyboard input works, spinner animates.
 
 ## Commit & Pull Request Guidelines
-Recent history favors concise, sentence-case subjects with optional scope prefixes (`Graal:`, `Support`). Note the main module in the subject and explain toolchain changes in the body. Pull requests should call out prerequisites (JDK 21, GCC, qemu), list manual test evidence (e.g., observed console text), and attach screenshots or logs only when they clarify VGA changes.
+Concise, sentence-case subjects. Note the main module affected. Explain translator or bootloader changes in the body. Include QEMU boot evidence (console output) for changes affecting runtime behavior.
