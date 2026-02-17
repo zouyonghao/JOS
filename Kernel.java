@@ -1,5 +1,51 @@
 public class Kernel {
 
+    // ===================================================================
+    // SYSCALL INTERFACE
+    // ===================================================================
+    
+    // Syscall numbers (Linux-compatible)
+    private static final int SYS_PRINT = 1;  // Print string
+    private static final int SYS_EXIT = 2;   // Exit program
+    
+    // Syscall argument globals (set by assembly before calling handler)
+    private static long syscallNum = 0;
+    private static long syscallArg1 = 0;
+    private static long syscallArg2 = 0;
+    private static long syscallArg3 = 0;
+    private static long syscallRet = 0;
+    
+    // Called from interrupt handler when vector == 0x80
+    private static long handleSyscall(long num, long arg1, long arg2, long arg3) {
+        switch ((int)num) {
+            case SYS_PRINT:
+                // arg1 = pointer to string, arg2 = length
+                return sysPrint(arg1, arg2);
+            case SYS_EXIT:
+                // arg1 = exit code
+                return sysExit(arg1);
+            default:
+                return -1;  // Unknown syscall
+        }
+    }
+    
+    private static long sysPrint(long ptr, long len) {
+        // Read string from user memory and print
+        int i = 0;
+        while (i < len) {
+            char c = readMemoryByte(ptr + i);
+            writeChar(c);
+            i = i + 1;
+        }
+        return 0;
+    }
+    
+    private static long sysExit(long code) {
+        // Return from program
+        // For now just return to kernel
+        return code;
+    }
+
     public static native void writeMemory(long addr, char _byte);
     
     // Low-level hardware access
@@ -2177,13 +2223,15 @@ public class Kernel {
         writeString("> ");
     }
 
-    // Initialize IDT - set up all 48 gates
+    // Initialize IDT - set up all 48 gates plus syscall (0x80)
     private static void initIDT() {
         int vector = 0;
         while (vector < 48) {
             setIDTGate(vector, 0, KERNEL_INT_GATE);
             vector = vector + 1;
         }
+        // Set up syscall interrupt gate (vector 0x80)
+        setIDTGate(0x80, 0, KERNEL_INT_GATE);
         loadIDT();
     }
 
@@ -2300,6 +2348,9 @@ public class Kernel {
                 }
             }
             sendEOI(1);
+        } else if (vector == 0x80) {
+            // Syscall interrupt - call handler with saved arguments
+            syscallRet = handleSyscall(syscallNum, syscallArg1, syscallArg2, syscallArg3);
         } else if (vector >= 32 && vector <= 47) {
             sendEOI(vector - 32);
         } else if (vector < 32) {

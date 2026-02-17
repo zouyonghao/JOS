@@ -97,6 +97,20 @@ extern void* isr_stub_table[];
 // Global state
 static uint64_t timer_ticks = 0;
 
+// =============================================================================
+// Syscall Interface - Globals for passing args between asm and Java
+// =============================================================================
+
+// External Java globals for syscall handling
+extern int64_t syscallNum;
+extern int64_t syscallArg1;
+extern int64_t syscallArg2;
+extern int64_t syscallArg3;
+extern int64_t syscallRet;
+
+// External Java method for syscall handling
+extern int64_t Kernel_handleSyscall_Long_Long_Long_Long(int64_t num, int64_t arg1, int64_t arg2, int64_t arg3);
+
 // Port I/O
 static inline void outb(uint16_t port, uint8_t value) {
   __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -111,9 +125,39 @@ static inline uint8_t inb(uint16_t port) {
 // External Java method for interrupt handling - Java does ALL dispatch logic
 extern void Kernel_handleInterrupt_Int(int32_t vector);
 
+// External Java globals for syscall args
+extern int64_t Kernel_syscallNum;
+extern int64_t Kernel_syscallArg1;
+extern int64_t Kernel_syscallArg2;
+extern int64_t Kernel_syscallArg3;
+extern int64_t Kernel_syscallRet;
+
 // Called from assembly - forwards to Java
 void interrupt_dispatch(uint64_t vector) {
+  if (vector == 0x80) {
+    // Syscall: save register values to Java globals before calling handler
+    // RAX = syscall number, RDI = arg1, RSI = arg2, RDX = arg3
+    int64_t rax, rdi, rsi, rdx;
+    __asm__ volatile(
+        "mov %%rax, %0\n"
+        "mov %%rdi, %1\n"
+        "mov %%rsi, %2\n"
+        "mov %%rdx, %3\n"
+        : "=r"(rax), "=r"(rdi), "=r"(rsi), "=r"(rdx)
+    );
+    Kernel_syscallNum = rax;
+    Kernel_syscallArg1 = rdi;
+    Kernel_syscallArg2 = rsi;
+    Kernel_syscallArg3 = rdx;
+  }
+  
   Kernel_handleInterrupt_Int((int32_t)vector);
+  
+  if (vector == 0x80) {
+    // Syscall: put return value back in RAX
+    int64_t ret = Kernel_syscallRet;
+    __asm__ volatile("mov %0, %%rax" : : "r"(ret) : "rax");
+  }
 }
 
 // =============================================================================

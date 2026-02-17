@@ -1,22 +1,27 @@
 # kernel_api.asm - Assembly wrappers for kernel calls
-# These functions provide the interface between user code and kernel services
-# For now, these are stubs that will be replaced with proper syscalls later
+# These functions use int 0x80 to invoke kernel syscalls
 #
 # GNU as syntax (AT&T style)
+# Syscall numbers:
+#   SYS_PRINT = 1  (rdi = str ptr, rsi = len)
+#   SYS_EXIT  = 2  (rdi = status)
 
     .text
     .globl kernel_print
     .globl kernel_exit
 
-# kernel_print - Print a null-terminated string
+# kernel_print - Print a string to the console
 # Input: %rdi = pointer to string
-# For now, this is a placeholder that infinite loops
-# The kernel will patch this or use a different mechanism
+#        %rsi = length of string
 kernel_print:
-    # Placeholder: infinite loop for now
-    jmp .
+    movq $1, %rax          # SYS_PRINT syscall number
+    int $0x80              # Trigger syscall
+    ret
 
 # kernel_exit - Exit the user program
+# Input: %rdi = exit status
 kernel_exit:
-    # Placeholder: infinite loop for now
+    movq $2, %rax          # SYS_EXIT syscall number
+    int $0x80              # Trigger syscall
+    # Should not return here, but just in case:
     jmp .

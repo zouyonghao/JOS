@@ -78,6 +78,13 @@ isr_stub 45
 isr_stub 46
 isr_stub 47
 
+# Syscall handler (vector 0x80) - special handling for system calls
+# Uses the same calling convention but for syscalls we need to save/restore args
+.globl isr_handler_128
+isr_handler_128:
+    pushq $128
+    jmp common_isr_handler
+
 # Common handler that saves all registers and calls into C
 common_isr_handler:
     # Save all general purpose registers
