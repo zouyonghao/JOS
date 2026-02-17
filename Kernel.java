@@ -1503,14 +1503,6 @@ public class Kernel {
             return;
         }
         writeString("Program entry bytes: ");
-        int b = 0;
-        while (b < 16) {
-            writeHexByte((int)readMemoryByte(entryPoint + b));
-            writeString(" ");
-            b = b + 1;
-        }
-        writeString("\n");
-        
         writeString("Jumping to program...\n");
         // Disable interrupts before calling program
         disableInterrupts();
