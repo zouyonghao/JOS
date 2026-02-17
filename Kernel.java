@@ -252,7 +252,7 @@ public class Kernel {
             writeString("  info    - Show system information\n");
             writeString("  reboot  - Restart the system\n");
             writeString("  time    - Show timer tick count\n");
-            writeString("  shutdown- Power off the system\n");
+            writeString("  shutdown- Power off (requires isa-debug-exit)\n");
         } else if (isClear()) {
             clearScreen();
         } else if (isInfo()) {
