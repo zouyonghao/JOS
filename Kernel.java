@@ -1491,31 +1491,31 @@ public class Kernel {
     
     // Initialize the filesystem
     private static void initFilesystem() {
-        writeString("Initializing filesystem...\n");
-        
-        // Disable interrupts during filesystem init to prevent corruption
+        writeString("Init FS\n");
         disableInterrupts();
         
-        // Allocate buffer for superblock (1 sector)
-        long buffer = heapAlloc(SFROFS_SECTOR_SIZE);
+        long buffer = heapAlloc(512);
         if (buffer == 0) {
-            writeString("ERROR: Could not allocate buffer for superblock\n");
+            writeString("No buf\n");
             enableInterrupts();
             return;
         }
         
-        // Test: read sector 0 (boot sector) first
-        writeString("  Testing sector 0 read...\n");
-        ataReadSectorBytes(0, 0, buffer);
-        writeString("  Sector 0 first byte: 0x");
-        writeHexByte((int)readMemoryByte(buffer));
-        writeString(" (should be 0xEA)\n");
+        // Read sector 2049
+        writeString("Read 2049\n");
+        ataReadSectorBytes(2049, 0, buffer);
         
-        // Now read the actual superblock
-        writeString("  Reading sector ");
-        writeNumber(SFROFS_SUPERBLOCK_SECTOR);
-        writeString("...\n");
-        ataReadSectorBytes(SFROFS_SUPERBLOCK_SECTOR, 0, buffer);
+        // Check bytes
+        writeString("Got: ");
+        writeHexByte((int)readMemoryByte(buffer));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer+1));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer+2));
+        writeString(" ");
+        writeHexByte((int)readMemoryByte(buffer+3));
+        writeString("\n");
+        
         boolean success = true;
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
@@ -1736,6 +1736,10 @@ public class Kernel {
     
     // Alternative: read byte by byte
     private static void ataReadSectorBytes(int lba, int drive, long bufferAddr) {
+        writeString("ATA: read sector ");
+        writeNumber(lba);
+        writeString("\n");
+        
         ataWaitNotBusy();
         char driveSelect = (char)(0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
         outb(ATA_DRIVE_SELECT, driveSelect);
@@ -1748,8 +1752,29 @@ public class Kernel {
         ataWaitNotBusy();
         ataWaitDataReady();
         
-        // Read 512 bytes one at a time
-        int i = 0;
+        // Read first 4 bytes and print them
+        writeString("First 4 bytes: ");
+        int b0 = inb(ATA_DATA);
+        int b1 = inb(ATA_DATA);
+        int b2 = inb(ATA_DATA);
+        int b3 = inb(ATA_DATA);
+        writeHexByte(b0);
+        writeString(" ");
+        writeHexByte(b1);
+        writeString(" ");
+        writeHexByte(b2);
+        writeString(" ");
+        writeHexByte(b3);
+        writeString("\n");
+        
+        // Store them
+        writeMemory(bufferAddr, (char)b0);
+        writeMemory(bufferAddr + 1, (char)b1);
+        writeMemory(bufferAddr + 2, (char)b2);
+        writeMemory(bufferAddr + 3, (char)b3);
+        
+        // Read remaining 508 bytes
+        int i = 4;
         while (i < 512) {
             writeMemory(bufferAddr + i, inb(ATA_DATA));
             i = i + 1;
