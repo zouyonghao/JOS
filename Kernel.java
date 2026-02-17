@@ -1402,8 +1402,13 @@ public class Kernel {
         }
         
         // Read file from disk
+        // File sectors are relative to filesystem start (sector 2048)
         int sectors = (fileSize + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
-        boolean success = readDisk(startSector, sectors, buffer);
+        int actualSector = 2048 + startSector;  // Add filesystem offset
+        writeString("  Reading from sector ");
+        writeNumber(actualSector);
+        writeString("\n");
+        boolean success = readDisk(actualSector, sectors, buffer);
         if (!success) {
             writeString("ERROR: Could not read binary file from disk\n");
             heapFree(buffer);
@@ -1411,6 +1416,15 @@ public class Kernel {
         }
         
         // Parse SBF header
+        writeString("  SBF bytes: ");
+        int m = 0;
+        while (m < 4) {
+            writeHexByte((int)readMemoryByte(buffer + m));
+            writeString(" ");
+            m = m + 1;
+        }
+        writeString("(expected: 53 42 46 00)\n");
+        
         char magic0 = readMemoryByte(buffer);
         char magic1 = readMemoryByte(buffer + 1);
         char magic2 = readMemoryByte(buffer + 2);
@@ -1422,6 +1436,7 @@ public class Kernel {
             heapFree(buffer);
             return 0;
         }
+        writeString("  SBF magic OK\n");
         
         int entryOffset = readUInt32(buffer, 4);
         int codeSize = readUInt32(buffer, 8);
@@ -1663,7 +1678,8 @@ public class Kernel {
         
         // Read file data
         int sectors = (size + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
-        boolean success = readDisk(startSector, sectors, buffer);
+        int actualSector = 2048 + startSector;
+        boolean success = readDisk(actualSector, sectors, buffer);
         if (!success) {
             writeString("ERROR: Could not read file\n");
             heapFree(buffer);
