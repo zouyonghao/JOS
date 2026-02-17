@@ -129,6 +129,25 @@ common_isr_handler:
     movq %rax, 112(%rsp)
 .not_syscall_ret:
 
+    # === Context switch check ===
+    # Java scheduler sets ctxLoadRSP to switch threads
+    movq Kernel_ctxLoadRSP(%rip), %rax
+    testq %rax, %rax
+    jz .no_context_switch
+
+    # Optionally save current RSP to thread's slot
+    movq Kernel_ctxSaveRSPAddr(%rip), %rbx
+    testq %rbx, %rbx
+    jz .skip_save
+    movq %rsp, (%rbx)
+.skip_save:
+    # Load new thread's RSP
+    movq %rax, %rsp
+    # Clear switch flags
+    movq $0, Kernel_ctxLoadRSP(%rip)
+    movq $0, Kernel_ctxSaveRSPAddr(%rip)
+.no_context_switch:
+
     # Restore all general purpose registers
     popq %r15
     popq %r14

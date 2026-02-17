@@ -7,6 +7,8 @@ public class Kernel {
     // Syscall numbers (Linux-compatible)
     private static final int SYS_PRINT = 1;  // Print string
     private static final int SYS_EXIT = 2;   // Exit program
+    private static final int SYS_YIELD = 3;  // Yield CPU
+    private static final int SYS_GETPID = 4; // Get thread ID
     
     // Syscall argument globals (set by assembly before calling handler)
     private static long syscallNum = 0;
@@ -22,8 +24,16 @@ public class Kernel {
                 // arg1 = pointer to string, arg2 = length
                 return sysPrint(arg1, arg2);
             case SYS_EXIT:
-                // arg1 = exit code
-                return sysExit(arg1);
+                // Terminate current thread and switch to next
+                terminateCurrentThread();
+                return 0;
+            case SYS_YIELD:
+                // Voluntary context switch
+                schedule();
+                return 0;
+            case SYS_GETPID:
+                // Return current thread ID
+                return currentThreadId;
             default:
                 return -1;  // Unknown syscall
         }
@@ -40,12 +50,6 @@ public class Kernel {
         return 0;
     }
     
-    private static long sysExit(long code) {
-        // Return from program
-        // For now just return to kernel
-        return code;
-    }
-
     public static native void writeMemory(long addr, char _byte);
     
     // Low-level hardware access
@@ -80,14 +84,43 @@ public class Kernel {
     
     // Program execution
     public static native void callProgram(long entryPoint);
-    
+
+    // ===================================================================
+    // THREAD MANAGEMENT
+    // ===================================================================
+
+    private static final int MAX_THREADS = 16;
+    private static final long THREAD_STACK_SIZE = 16384;  // 16KB per thread
+
+    private static final int THREAD_FREE = 0;
+    private static final int THREAD_READY = 1;
+    private static final int THREAD_RUNNING = 2;
+    private static final int THREAD_TERMINATED = 3;
+
+    // Per-thread state (Java arrays, accessed only from Java)
+    private static int[] threadState = new int[MAX_THREADS];
+    private static long[] threadStackBase = new long[MAX_THREADS];
+
+    // Saved RSP table at fixed raw memory address (accessed by both Java and assembly)
+    private static final long THREAD_RSP_TABLE = 0x880000L;
+
+    private static int currentThreadId = 0;
+    private static int threadCount = 0;
+    private static int scheduleCounter = 0;
+    private static final int SCHEDULE_INTERVAL = 10;  // switch every 10 ticks (~100ms)
+
+    // Context switch interface — set by Java scheduler, read by assembly ISR
+    // Assembly symbols: @Kernel_ctxSaveRSPAddr, @Kernel_ctxLoadRSP
+    private static long ctxSaveRSPAddr = 0;  // address to save current RSP to (0 = don't save)
+    private static long ctxLoadRSP = 0;      // new RSP to load (0 = no switch)
+
     // ===================================================================
     // MEMORY MANAGEMENT (All in Java!)
     // ===================================================================
     
     // E820 memory map location (set up by bootloader)
-    private static final long E820_COUNT_ADDR = 0xF000L;
-    private static final long E820_BUFFER_ADDR = 0xF004L;
+    private static final long E820_COUNT_ADDR = 0x500L;
+    private static final long E820_BUFFER_ADDR = 0x504L;
     private static final int E820_ENTRY_SIZE = 24;
     
     // Memory types from E820
@@ -1005,6 +1038,7 @@ public class Kernel {
     private static boolean isCat() { return inputStartsWith("cat "); }
     private static boolean isStat() { return inputStartsWith("stat "); }
     private static boolean isRun() { return inputStartsWith("run "); }
+    private static boolean isPs() { return inputEquals("ps"); }
     
     // Get character at position (1-indexed for compatibility with old code)
     private static char getInputChar(int pos) {
@@ -1542,19 +1576,150 @@ public class Kernel {
         return entryPoint;
     }
     
-    // Run a loaded program (synchronous - just call it)
+    // Run a loaded program — spawns a new thread
     private static void runProgram(long entryPoint) {
         if (entryPoint == 0) {
             writeString("ERROR: Invalid entry point\n");
             return;
         }
-        writeString("Program entry bytes: ");
-        writeString("Jumping to program...\n");
-        // Disable interrupts before calling program
-        disableInterrupts();
-        callProgram(entryPoint);
-        enableInterrupts();
-        writeString("\nProgram returned.\n");
+        int tid = spawnThread(entryPoint);
+        if (tid < 0) {
+            writeString("Failed to spawn thread\n");
+        } else {
+            writeString("Spawned thread ");
+            writeChar((char)('0' + tid));
+            writeChar('\n');
+        }
+    }
+
+    // ===================================================================
+    // THREADING IMPLEMENTATION
+    // ===================================================================
+
+    private static void initThreading() {
+        int i = 0;
+        while (i < MAX_THREADS) {
+            threadState[i] = THREAD_FREE;
+            threadStackBase[i] = 0;
+            writeMemoryLong(THREAD_RSP_TABLE + i * 8, 0);
+            i = i + 1;
+        }
+        // Thread 0 = current execution (shell), already running on boot stack
+        threadState[0] = THREAD_RUNNING;
+        currentThreadId = 0;
+        threadCount = 1;
+    }
+
+    private static int spawnThread(long entryPoint) {
+        // Find free slot
+        int tid = -1;
+        int i = 1; // skip thread 0 (shell)
+        while (i < MAX_THREADS) {
+            if (threadState[i] == THREAD_FREE) {
+                tid = i;
+                i = MAX_THREADS; // break
+            }
+            i = i + 1;
+        }
+        if (tid < 0) return -1;
+
+        // Allocate stack from heap
+        long stackBase = heapAlloc(THREAD_STACK_SIZE);
+        if (stackBase == 0) return -1;
+        threadStackBase[tid] = stackBase;
+        long stackTop = stackBase + THREAD_STACK_SIZE;
+
+        // Build fake interrupt frame on the new stack (grows downward)
+        // When assembly does popq R15..RAX, addq $8 (skip vector), iretq,
+        // execution begins at entryPoint with interrupts enabled
+        long sp = stackTop;
+
+        // iretq frame (popped last, so written first at high addresses)
+        sp = sp - 8; writeMemoryLong(sp, 0x10);         // SS (kernel data segment)
+        sp = sp - 8; writeMemoryLong(sp, stackTop);     // RSP (stack pointer after iretq)
+        sp = sp - 8; writeMemoryLong(sp, 0x200);        // RFLAGS (IF=1, interrupts enabled)
+        sp = sp - 8; writeMemoryLong(sp, 0x08);         // CS (kernel code segment)
+        sp = sp - 8; writeMemoryLong(sp, entryPoint);   // RIP
+
+        // Vector number (dummy, skipped by addq $8, %rsp)
+        sp = sp - 8; writeMemoryLong(sp, 0);
+
+        // 15 GPRs in push order: RAX, RCX, RDX, RBX, RBP, RSI, RDI, R8-R15
+        // (popped in reverse: R15 first, RAX last)
+        i = 0;
+        while (i < 15) {
+            sp = sp - 8; writeMemoryLong(sp, 0);
+            i = i + 1;
+        }
+
+        // Save initial RSP to thread RSP table
+        writeMemoryLong(THREAD_RSP_TABLE + tid * 8, sp);
+        threadState[tid] = THREAD_READY;
+        threadCount = threadCount + 1;
+        return tid;
+    }
+
+    private static void schedule() {
+        if (threadCount <= 1) return;
+
+        // Round-robin: find next READY thread
+        int next = currentThreadId;
+        int i = 0;
+        while (i < MAX_THREADS) {
+            next = (next + 1) % MAX_THREADS;
+            if (threadState[next] == THREAD_READY) {
+                i = MAX_THREADS; // break
+            }
+            i = i + 1;
+        }
+        if (next == currentThreadId) return; // no other ready thread
+        if (threadState[next] != THREAD_READY) return;
+
+        // Set up context switch for assembly
+        ctxSaveRSPAddr = THREAD_RSP_TABLE + currentThreadId * 8;
+        ctxLoadRSP = readMemoryLong(THREAD_RSP_TABLE + next * 8);
+
+        // Update states
+        if (threadState[currentThreadId] == THREAD_RUNNING) {
+            threadState[currentThreadId] = THREAD_READY;
+        }
+        threadState[next] = THREAD_RUNNING;
+        currentThreadId = next;
+    }
+
+    private static void terminateCurrentThread() {
+        threadState[currentThreadId] = THREAD_TERMINATED;
+        threadCount = threadCount - 1;
+
+        // Free stack memory (thread 0 uses boot stack, not heap)
+        if (currentThreadId != 0 && threadStackBase[currentThreadId] != 0) {
+            heapFree(threadStackBase[currentThreadId]);
+            threadStackBase[currentThreadId] = 0;
+        }
+
+        // Find next ready thread
+        int next = -1;
+        int i = 0;
+        while (i < MAX_THREADS) {
+            if (threadState[i] == THREAD_READY) {
+                next = i;
+                i = MAX_THREADS; // break
+            }
+            i = i + 1;
+        }
+
+        if (next >= 0) {
+            // Don't save dying thread's RSP
+            ctxSaveRSPAddr = 0;
+            ctxLoadRSP = readMemoryLong(THREAD_RSP_TABLE + next * 8);
+            threadState[next] = THREAD_RUNNING;
+            threadState[currentThreadId] = THREAD_FREE;
+            currentThreadId = next;
+        } else {
+            // No runnable threads — should not happen if shell (thread 0) is alive
+            writeString("No runnable threads!\n");
+            threadState[currentThreadId] = THREAD_FREE;
+        }
     }
     
     // Initialize the filesystem
@@ -2084,6 +2249,7 @@ public class Kernel {
             writeString("  cat       - Display file contents (e.g., cat readme.txt)\n");
             writeString("  stat      - Show file info (e.g., stat readme.txt)\n");
             writeString("  run       - Load and run a binary (e.g., run program.bin)\n");
+            writeString("  ps        - List running threads\n");
             writeString("  shutdown  - Power off\n");
         } else if (isClear()) {
             clearScreen();
@@ -2215,10 +2381,35 @@ public class Kernel {
                     }
                 }
             }
+        } else if (isPs()) {
+            // List threads
+            writeString("TID  STATE\n");
+            int i = 0;
+            while (i < MAX_THREADS) {
+                if (threadState[i] != THREAD_FREE) {
+                    writeString(" ");
+                    if (i < 10) {
+                        writeChar((char)('0' + i));
+                    } else {
+                        writeChar((char)('0' + i / 10));
+                        writeChar((char)('0' + i % 10));
+                    }
+                    writeString("   ");
+                    if (threadState[i] == THREAD_READY) {
+                        writeString("READY");
+                    } else if (threadState[i] == THREAD_RUNNING) {
+                        writeString("RUNNING");
+                    } else if (threadState[i] == THREAD_TERMINATED) {
+                        writeString("TERMINATED");
+                    }
+                    writeString("\n");
+                }
+                i = i + 1;
+            }
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }
-        
+
         resetBuffer();
         writeString("> ");
     }
@@ -2338,6 +2529,12 @@ public class Kernel {
             tickCount = tickCount + 1;
             incTicks();
             sendEOI(0);
+            // Preemptive scheduling
+            scheduleCounter = scheduleCounter + 1;
+            if (scheduleCounter >= SCHEDULE_INTERVAL) {
+                scheduleCounter = 0;
+                schedule();
+            }
         } else if (vector == 33) {
             // Keyboard interrupt (IRQ1 -> vector 33)
             char scancode = inb(KEYBOARD_DATA);
@@ -2401,6 +2598,17 @@ public class Kernel {
         // Initialize filesystem
         initFilesystem();
         writeString("\n");
+
+        // Initialize threading (thread 0 = this shell)
+        initThreading();
+        writeString("Threading initialized (preemptive, max ");
+        if (MAX_THREADS < 10) {
+            writeChar((char)('0' + MAX_THREADS));
+        } else {
+            writeChar((char)('0' + MAX_THREADS / 10));
+            writeChar((char)('0' + MAX_THREADS % 10));
+        }
+        writeString(" threads)\n\n");
         
         writeString("> ");
         

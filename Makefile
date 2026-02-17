@@ -73,7 +73,7 @@ test-command: BB.bin
 
 # Create disk image with user programs
 disk: BB.bin
-	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf
+	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf
 	@echo "Created $(BUILDDIR)/disk.img"
 	# Embed filesystem into kernel disk image at 1MB offset
 	python3 embed_fs.py $(BUILDDIR)/BB.bin $(BUILDDIR)/disk.img

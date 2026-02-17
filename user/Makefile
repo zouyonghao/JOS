@@ -26,7 +26,7 @@ CFLAGS = -m64 -ffreestanding -nostdlib -nostdinc \
 LDFLAGS = -nostdlib -Ttext 0x400000
 
 # Source files
-USER_C_SRCS = hello.c
+USER_C_SRCS = hello.c counter.c
 USER_ASM_SRCS = lib/kernel_api.asm
 
 # Object files
@@ -35,7 +35,7 @@ USER_ASM_OBJS = $(USER_ASM_SRCS:.asm=.o)
 USER_OBJS = $(USER_C_OBJS) $(USER_ASM_OBJS)
 
 # Programs to build
-PROGRAMS = hello.sbf
+PROGRAMS = hello.sbf counter.sbf
 
 .PHONY: all clean inspect help
 
@@ -45,8 +45,14 @@ all: $(PROGRAMS)
 hello.sbf: hello.elf
 	$(PYTHON) mksbf.py $< $@
 
+counter.sbf: counter.elf
+	$(PYTHON) mksbf.py $< $@
+
 # Link ELF binary
-hello.elf: $(USER_OBJS)
+hello.elf: hello.o lib/kernel_api.o
+	$(LD) $(LDFLAGS) -o $@ $^
+
+counter.elf: counter.o lib/kernel_api.o
 	$(LD) $(LDFLAGS) -o $@ $^
 
 # Compile C source files
@@ -58,7 +64,7 @@ lib/kernel_api.o: lib/kernel_api.asm
 	$(ASM) -o $@ $<
 
 clean:
-	rm -f $(USER_OBJS) hello.elf $(PROGRAMS)
+	rm -f *.o lib/*.o *.elf $(PROGRAMS)
 
 # Debug target to inspect ELF
 inspect: hello.elf

@@ -3,12 +3,16 @@
 #
 # GNU as syntax (AT&T style)
 # Syscall numbers:
-#   SYS_PRINT = 1  (rdi = str ptr, rsi = len)
-#   SYS_EXIT  = 2  (rdi = status)
+#   SYS_PRINT  = 1  (rdi = str ptr, rsi = len)
+#   SYS_EXIT   = 2  (rdi = status)
+#   SYS_YIELD  = 3
+#   SYS_GETPID = 4
 
     .text
     .globl kernel_print
     .globl kernel_exit
+    .globl kernel_yield
+    .globl kernel_getpid
 
 # kernel_print - Print a string to the console
 # Input: %rdi = pointer to string
@@ -18,9 +22,22 @@ kernel_print:
     int $0x80              # Trigger syscall
     ret
 
-# kernel_exit - Exit the user program
+# kernel_exit - Exit the user program (terminates thread)
 # Input: %rdi = exit status
 kernel_exit:
     movq $2, %rax          # SYS_EXIT syscall number
     int $0x80              # Trigger syscall
-    ret                    # Return to caller so _start can unwind back to kernel
+    ret
+
+# kernel_yield - Voluntarily yield CPU to another thread
+kernel_yield:
+    movq $3, %rax          # SYS_YIELD syscall number
+    int $0x80
+    ret
+
+# kernel_getpid - Get current thread ID
+# Returns: thread ID in %rax
+kernel_getpid:
+    movq $4, %rax          # SYS_GETPID syscall number
+    int $0x80
+    ret

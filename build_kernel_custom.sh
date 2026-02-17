@@ -25,7 +25,7 @@ java JavaToLLVM Kernel.class generated-llvm/Kernel.ll
 
 # Step 4: Compile LLVM IR to object file
 echo "Compiling LLVM IR to object file..."
-clang -c generated-llvm/Kernel.ll -o obj/Kernel.o -O0 -fno-pic -mcmodel=small
+clang -c generated-llvm/Kernel.ll -o obj/Kernel.o -O0 -fno-pic -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2
 
 echo "Generated obj/Kernel.o:"
 nm obj/Kernel.o | grep -E "^[0-9a-f]+ [TtWw] " | head -10
