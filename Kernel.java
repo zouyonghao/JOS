@@ -1402,7 +1402,7 @@ public class Kernel {
         
         // Read file from disk
         int sectors = (fileSize + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
-        boolean success = readDisk(startSector, sectors, buffer);
+        boolean success = readDataDisk(startSector, sectors, buffer);
         if (!success) {
             writeString("ERROR: Could not read binary file from disk\n");
             heapFree(buffer);
@@ -1500,8 +1500,8 @@ public class Kernel {
             return;
         }
         
-        // Read superblock from sector 1
-        boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        // Read superblock from sector 1 (data disk drive 1)
+        boolean success = readDataDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
@@ -1565,8 +1565,8 @@ public class Kernel {
             return;
         }
         
-        // Read file table from sector 2
-        success = readDisk(2, tableSectors, tableBuffer);
+        // Read file table from sector 2 (data disk drive 1)
+        success = readDataDisk(2, tableSectors, tableBuffer);
         if (!success) {
             writeString("ERROR: Could not read file table\n");
             heapFree(tableBuffer);
@@ -1754,6 +1754,22 @@ public class Kernel {
         while (sector < count) {
             int currentLba = lba + sector;
             ataReadSector(currentLba, 0, addr);
+            addr = addr + 512;
+            sector = sector + 1;
+        }
+        return true;
+    }
+    
+    // Read from data disk (drive 1) for filesystem
+    private static boolean readDataDisk(int lba, int count, long bufferAddr) {
+        if (count <= 0) return false;
+        if (lba < 0) return false;
+        
+        int sector = 0;
+        long addr = bufferAddr;
+        while (sector < count) {
+            int currentLba = lba + sector;
+            ataReadSector(currentLba, 1, addr);  // Drive 1 = data disk
             addr = addr + 512;
             sector = sector + 1;
         }

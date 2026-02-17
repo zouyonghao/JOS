@@ -22,7 +22,7 @@ def pad_to_sector(data):
 
 def create_superblock(num_files, data_start):
     """Create SFROFS superblock."""
-    magic = b'SBF\x00'
+    magic = b'SFRO'
     version = 1
     # Structure: magic(4) + version(1) + padding(3) + num_files(2) + data_start(4) + reserved(498)
     superblock = magic

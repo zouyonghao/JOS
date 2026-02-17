@@ -77,6 +77,7 @@ disk: BB.bin
 	@echo "Created $(BUILDDIR)/disk.img"
 
 # Run QEMU with disk image (for testing user programs)
+# Disk layout: BB.bin = boot drive (0), disk.img = data drive (1)
 qemu-disk: disk
 	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin -drive format=raw,file=$(BUILDDIR)/disk.img,if=ide,index=1
 
