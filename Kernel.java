@@ -1726,12 +1726,13 @@ public class Kernel {
         } while ((status & ATA_SR_BSY) != 0);
     }
     
-    // Wait until data is ready (DRQ set)
+    // Wait until data is ready (DRQ set) or error
     private static void ataWaitDataReady() {
         char status;
         do {
             status = inb(ATA_STATUS);
-        } while ((status & ATA_SR_DRQ) == 0 && (status & ATA_SR_BSY) == 0);
+        } while ((status & ATA_SR_BSY) != 0);  // Wait while busy
+        // After BSY clears, DRQ should be set if data is ready
     }
     
     // Read a single sector (512 bytes) using LBA28 addressing
