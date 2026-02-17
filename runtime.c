@@ -35,14 +35,18 @@ static void serial_write(char c) {
 }
 
 void Kernel_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
+  // VGA memory: write with serial output for debugging
   if (addr >= 0xB8000 && addr <= 0xB8F9F) {
     if ((addr - 0xB8000) % 2 == 0) {
       serial_write((char)_byte);
     }
-    *((uint8_t *)addr) = (uint8_t)_byte;
-  } else if (addr == SERIAL_PORT) {
+  }
+  // Serial port
+  if (addr == SERIAL_PORT) {
     serial_write((char)_byte);
   }
+  // Write to any address (including heap)
+  *((uint8_t *)addr) = (uint8_t)_byte;
 }
 
 // =============================================================================
