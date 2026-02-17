@@ -13,6 +13,9 @@ LDFLAGS= -lgcc -nostdlib
 QEMUCMD = qemu-system-x86_64
 QEMUFLAGS = -nographic -display curses -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=
 
+# QEMU with isa-debug-exit device for shutdown support
+QEMUFLAGS_EXIT = -nographic -display curses -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -D qemu_debug.log -drive format=raw,file=
+
 OBJDIR = ./obj
 OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o ./obj/interrupts_asm.o
 BUILDDIR = ./build
@@ -22,6 +25,9 @@ BB.bin : $(BUILDDIR) $(OBJLIST)
 
 qemu: BB.bin
 	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
+
+qemu-exit: BB.bin
+	$(QEMUCMD) $(QEMUFLAGS_EXIT)$(BUILDDIR)/BB.bin
 
 $(OBJDIR)/Kernel.o: Kernel.java JavaToLLVM.java
 	./build_kernel_custom.sh

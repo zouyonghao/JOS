@@ -93,8 +93,14 @@ void Kernel_outb_Int_Char(int32_t port, int32_t data) {
   outb((uint16_t)port, (uint8_t)data);
 }
 
+void Kernel_outw_Int_Int(int32_t port, int32_t data) {
+  __asm__ volatile("outw %0, %w1" : : "a"((uint16_t)data), "d"((uint16_t)port));
+}
+
 void Kernel_outl_Int_Int(int32_t port, int32_t data) {
-  __asm__ volatile("outl %0, %1" : : "a"(data), "Nd"((uint16_t)port));
+  // outl requires port in dx register, data in eax
+  uint16_t port16 = (uint16_t)port;
+  __asm__ volatile("outl %0, %w1" : : "a"(data), "d"(port16));
 }
 
 void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {

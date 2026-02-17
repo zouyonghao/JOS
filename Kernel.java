@@ -190,10 +190,15 @@ public class Kernel {
     
     // Native method for 32-bit port output (needed for ACPI shutdown)
     public static native void outl(int port, int data);
+    public static native void outw(int port, int data);
     
     private static void shutdown() {
-        // ACPI shutdown for QEMU (port 0x604, value 0x2000)
+        // Method 1: ACPI shutdown for QEMU (port 0x604, value 0x2000)
         outl(0x604, 0x2000);
+        // Method 2: Alternative Bochs/QEMU port
+        outw(0xB004, 0x2000);
+        // Method 3: isa-debug-exit device (works with -device isa-debug-exit,iobase=0xf4,iosize=0x04)
+        outb(0xF4, (char) 0x00);
     }
     
     private static void resetBuffer() {
