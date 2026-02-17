@@ -33,6 +33,7 @@ public class JavaToLLVM {
 
     // ===== LLVM IR generation state =====
     static StringBuilder out = new StringBuilder();
+    static StringBuilder globalsOut = new StringBuilder();  // for globals that need to be declared before functions
     static int ssaCounter;
     static LinkedHashMap<String, Integer> stringConstants = new LinkedHashMap<>();
     static int stringIndex = 0;
@@ -40,6 +41,13 @@ public class JavaToLLVM {
     // ===== Symbolic operand stack =====
     static Deque<String> stack = new ArrayDeque<>();
     static Deque<Character> stackTypes = new ArrayDeque<>();
+    
+    // ===== Static array allocation tracking =====
+    static String currentMethodName = "";
+    static String pendingStaticArrayField = null;  // field name if next putstatic should use global array
+    static int pendingStaticArraySize = 0;
+    static int pendingStaticArrayTypeCode = 0;
+    static List<String> atTopDeclarations = new ArrayList<>();  // declarations to emit before functions
 
     // ===== Per-block stack tracking for phi node generation =====
     static Map<Integer, List<String>> blockExitStacks;
@@ -51,6 +59,7 @@ public class JavaToLLVM {
     static class FieldInfo {
         String name, descriptor;
         int accessFlags;
+        int arraySize;  // for static array fields, 0 = not an array or dynamic
     }
 
     static class MethodInfo {
@@ -236,15 +245,26 @@ public class JavaToLLVM {
     // =========================================================================
 
     static void generateLLVM() {
+        // Reset state
+        out.setLength(0);
+        globalsOut.setLength(0);
+        atTopDeclarations.clear();
+        ssaCounter = 0;
+        
         // First pass: collect all string constants from all methods
         collectStringConstants();
 
-        emitModuleHeader();
+        // Phase 1: Emit module header to globalsOut first (so it ends up at the top)
+        emitAtTop("; ModuleID = '" + className + "'");
+        emitAtTop("source_filename = \"" + className + ".java\"");
+        emitAtTop("target triple = \"x86_64-unknown-linux-gnu\"");
+        emitAtTop("");
+        
+        // Phase 2: Emit string constants and static fields to out
         emitStringConstants();
         emitStaticFields();
-        emit("");
-
-        // Emit native method declarations
+        
+        // Phase 3: Emit functions (this collects array storage globals into globalsOut)
         for (MethodInfo m : methods) {
             if ((m.accessFlags & 0x0100) != 0) { // ACC_NATIVE
                 String mangledName = mangleName(className, m.name, m.descriptor);
@@ -253,17 +273,19 @@ public class JavaToLLVM {
                 registerExtern(retType, mangledName, params);
             }
         }
-
-        // Emit functions
+        
         for (MethodInfo m : methods) {
-            if (m.name.equals("<init>")) continue; // skip constructor
-            if ((m.accessFlags & 0x0100) != 0) continue; // skip native methods (ACC_NATIVE)
+            if (m.name.equals("<init>")) continue;
+            if ((m.accessFlags & 0x0100) != 0) continue;
             if (m.code == null) continue;
             emitFunction(m);
             emit("");
         }
-
+        
         emitExternDeclarations();
+        
+        // Prepend globals to output (before module header)
+        out.insert(0, globalsOut.toString());
     }
 
     static void emitModuleHeader() {
@@ -379,7 +401,7 @@ public class JavaToLLVM {
         emit("  br label %bb_0");
 
         // Translate bytecodes
-        translateMethod(m, localTypes, retType);
+        translateMethod(m, localTypes, retType, m.name);
 
         emit("}");
     }
@@ -390,8 +412,10 @@ public class JavaToLLVM {
 
     static boolean lastWasTerminator;
 
-    static void translateMethod(MethodInfo m, char[] localTypes, String retType) {
+    static void translateMethod(MethodInfo m, char[] localTypes, String retType, String methodName) {
         byte[] code = m.code;
+        currentMethodName = methodName;
+        pendingStaticArrayField = null;  // reset at method start
         Set<Integer> blockStarts = discoverBasicBlocks(code);
         predecessorMap = buildPredecessorMap(code, blockStarts);
         blockExitStacks = new HashMap<>();
@@ -817,7 +841,42 @@ public class JavaToLLVM {
                     String llType = descriptorToLLVMType(fieldDesc);
                     String globalName = "@" + fieldClass + "_" + fieldName;
                     String val = pop();
-                    emit("  store " + llType + " " + val + ", " + llType + "* " + globalName);
+                    
+                    // Check if this is storing a pending static array
+                    if (val.equals("STATIC_ARRAY_PLACEHOLDER") && pendingStaticArrayField != null) {
+                        // Emit code to create global array storage and initialize it
+                        int elemSize;
+                        switch (pendingStaticArrayTypeCode) {
+                            case 4: case 8: elemSize = 1; break;
+                            case 5: case 9: elemSize = 2; break;
+                            case 6: case 10: elemSize = 4; break;
+                            case 7: case 11: elemSize = 8; break;
+                            default: elemSize = 8;
+                        }
+                        int totalBytes = 8 + pendingStaticArraySize * elemSize;
+                        
+                        // Emit the global array storage (before module header, will be reordered)
+                        String arrayGlobalName = "@" + fieldClass + "_" + fieldName + "_storage";
+                        emitAtTop(arrayGlobalName + " = internal dso_local global [" + totalBytes + " x i8] zeroinitializer, align 8");
+                        
+                        // Get pointer to global array storage and cast to i8*
+                        String arrPtr = nextSSA();
+                        emit("  " + arrPtr + " = bitcast [" + totalBytes + " x i8]* " + arrayGlobalName + " to i8*");
+                        
+                        // Store length at offset 0
+                        String lenPtr = nextSSA();
+                        emit("  " + lenPtr + " = bitcast i8* " + arrPtr + " to i64*");
+                        String count64 = nextSSA();
+                        emit("  " + count64 + " = zext i32 " + pendingStaticArraySize + " to i64");
+                        emit("  store i64 " + count64 + ", i64* " + lenPtr + ", align 8");
+                        
+                        // Store the array pointer to the field global (which is i8*)
+                        emit("  store i8* " + arrPtr + ", i8** " + globalName);
+                        
+                        pendingStaticArrayField = null;
+                    } else {
+                        emit("  store " + llType + " " + val + ", " + llType + "* " + globalName);
+                    }
                     pc += 3; break;
                 }
 
@@ -871,6 +930,19 @@ public class JavaToLLVM {
                     translateNewArray(0, count); // 0 = treat as pointer array
                     pc += 3; break;
                 }
+                case 0xC5: // multianewarray
+                {
+                    // Simplified: treat as single-dimensional array
+                    // Read dimensions (1 byte) and class index (2 bytes)
+                    int dimensions = code[pc + 3] & 0xFF;
+                    // Pop all dimension counts, only use the first one
+                    String firstDim = "0";
+                    for (int i = 0; i < dimensions; i++) {
+                        firstDim = pop();
+                    }
+                    translateNewArray(0, firstDim); // 0 = object array
+                    pc += 4; break;
+                }
                 case 0xBE: // arraylength
                 {
                     String arrRef = pop();
@@ -889,6 +961,10 @@ public class JavaToLLVM {
                     translateArrayLoad("i32", 4, 'i'); pc++; break;
                 case 0x4F: // iastore
                     translateArrayStore("i32", 4); pc++; break;
+                case 0x32: // aaload (object array load - treat as pointer)
+                    translateArrayLoad("i64", 8, 'p'); pc++; break;
+                case 0x53: // aastore (object array store - treat as pointer)
+                    translateArrayStore("i64", 8); pc++; break;
                 case 0x2F: // laload
                     translateArrayLoad("i64", 8, 'l'); pc++; break;
                 case 0x50: // lastore
@@ -1112,6 +1188,22 @@ public class JavaToLLVM {
 
     // Array element sizes: 0=ref, 4=boolean, 5=char, 6=float, 7=double, 8=byte, 9=short, 10=int, 11=long
     static void translateNewArray(int typeCode, String count) {
+        // Check if this is a constant-size array allocation in <clinit> (static field init)
+        // Constant size means count is a constant (starts with digits for positive, or - for negative)
+        boolean isConstantSize = count.matches("-?\\d+");
+        
+        if (currentMethodName.equals("<clinit>") && isConstantSize) {
+            // This might be a static array field initialization
+            // Store info for putstatic to use
+            pendingStaticArrayField = "PENDING";  // placeholder, actual field name set by putstatic
+            pendingStaticArraySize = Integer.parseInt(count);
+            pendingStaticArrayTypeCode = typeCode;
+            
+            // Return a placeholder - putstatic will substitute the actual global
+            push("STATIC_ARRAY_PLACEHOLDER", 'p');
+            return;
+        }
+        
         int elemSize;
         switch (typeCode) {
             case 4: case 8: elemSize = 1; break; // boolean, byte
@@ -2089,5 +2181,43 @@ public class JavaToLLVM {
 
     static void emit(String line) {
         out.append(line).append('\n');
+    }
+    
+    static void emitAtTop(String line) {
+        globalsOut.append(line).append('\n');
+    }
+    
+    // Find the position in the output where array storage globals should be inserted
+    // Returns the index AFTER the static fields section but BEFORE/AT function definitions
+    static int findInsertionPoint(String output) {
+        // Array storage globals from clinit need to be moved OUT of the clinit function
+        // Find the position after static fields (which are at module level)
+        // but before or at the first function definition
+        
+        // Look for the clinit function entry - we want to insert globals BEFORE it
+        int clinitPos = output.indexOf("define dso_local void @" + className + "_clinit_");
+        if (clinitPos >= 0) {
+            // Insert globals right before the clinit function
+            return clinitPos;
+        }
+        
+        // Fallback: look for first define or declare
+        int definePos = output.indexOf("\ndefine ");
+        int declarePos = output.indexOf("\ndeclare ");
+        
+        int funcPos = -1;
+        if (definePos >= 0 && declarePos >= 0) {
+            funcPos = Math.min(definePos, declarePos);
+        } else if (definePos >= 0) {
+            funcPos = definePos;
+        } else if (declarePos >= 0) {
+            funcPos = declarePos;
+        }
+        
+        if (funcPos >= 0) {
+            return funcPos + 1;
+        }
+        
+        return -1;
     }
 }

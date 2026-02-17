@@ -2,6 +2,29 @@
 #include <stdint.h>
 
 // =============================================================================
+// Malloc/Free - using kernel's heap allocator
+// =============================================================================
+
+extern int64_t Kernel_heapAlloc_Long(int64_t size);
+extern void Kernel_heapFree_Long(int64_t ptr);
+
+void* malloc(size_t size) {
+  // The kernel's heapAlloc adds an 8-byte header, but for arrays
+  // the translator expects: [8-byte length | elements]
+  // So we just allocate the requested size + 8 for the length header
+  int64_t ptr = Kernel_heapAlloc_Long((int64_t)size + 8);
+  if (ptr == 0) return NULL;
+  // Return pointer to the element area (after length header)
+  return (void*)(ptr + 8);
+}
+
+void free(void* ptr) {
+  if (ptr == NULL) return;
+  // Go back to the actual allocation start (before the length header)
+  Kernel_heapFree_Long((int64_t)ptr - 8);
+}
+
+// =============================================================================
 // Native method: Kernel.writeMemory(long, char)
 // =============================================================================
 

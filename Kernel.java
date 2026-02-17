@@ -514,7 +514,7 @@ public class Kernel {
     }
     
     // Allocate memory from heap using first-fit
-    private static long heapAlloc(long size) {
+    public static long heapAlloc(long size) {
         // Align to 8 bytes minimum
         if (size < HEAP_MIN_BLOCK_SIZE) {
             size = HEAP_MIN_BLOCK_SIZE;
@@ -569,7 +569,7 @@ public class Kernel {
     }
     
     // Free memory back to heap
-    private static void heapFree(long ptr) {
+    public static void heapFree(long ptr) {
         if (ptr == 0) return;
         
         // Get block address (ptr points after header)
@@ -716,8 +716,7 @@ public class Kernel {
     }
     
     // Static buffer for number conversion (no heap allocation)
-    private static char n1=0, n2=0, n3=0, n4=0, n5=0, n6=0, n7=0, n8=0, n9=0, n10=0;
-    private static char n11=0, n12=0, n13=0, n14=0, n15=0, n16=0, n17=0, n18=0, n19=0, n20=0;
+    private static char[] numBuffer = new char[20];
     
     private static void writeNumber(long num) {
         if (num == 0) {
@@ -728,52 +727,14 @@ public class Kernel {
         int i = 0;
         while (num > 0) {
             char digit = (char)('0' + (num % 10));
-            if (i == 0) n1 = digit;
-            else if (i == 1) n2 = digit;
-            else if (i == 2) n3 = digit;
-            else if (i == 3) n4 = digit;
-            else if (i == 4) n5 = digit;
-            else if (i == 5) n6 = digit;
-            else if (i == 6) n7 = digit;
-            else if (i == 7) n8 = digit;
-            else if (i == 8) n9 = digit;
-            else if (i == 9) n10 = digit;
-            else if (i == 10) n11 = digit;
-            else if (i == 11) n12 = digit;
-            else if (i == 12) n13 = digit;
-            else if (i == 13) n14 = digit;
-            else if (i == 14) n15 = digit;
-            else if (i == 15) n16 = digit;
-            else if (i == 16) n17 = digit;
-            else if (i == 17) n18 = digit;
-            else if (i == 18) n19 = digit;
-            else if (i == 19) n20 = digit;
+            numBuffer[i] = digit;
             num = num / 10;
             i = i + 1;
         }
         
         while (i > 0) {
             i = i - 1;
-            if (i == 0) writeChar(n1);
-            else if (i == 1) writeChar(n2);
-            else if (i == 2) writeChar(n3);
-            else if (i == 3) writeChar(n4);
-            else if (i == 4) writeChar(n5);
-            else if (i == 5) writeChar(n6);
-            else if (i == 6) writeChar(n7);
-            else if (i == 7) writeChar(n8);
-            else if (i == 8) writeChar(n9);
-            else if (i == 9) writeChar(n10);
-            else if (i == 10) writeChar(n11);
-            else if (i == 11) writeChar(n12);
-            else if (i == 12) writeChar(n13);
-            else if (i == 13) writeChar(n14);
-            else if (i == 14) writeChar(n15);
-            else if (i == 15) writeChar(n16);
-            else if (i == 16) writeChar(n17);
-            else if (i == 17) writeChar(n18);
-            else if (i == 18) writeChar(n19);
-            else if (i == 19) writeChar(n20);
+            writeChar(numBuffer[i]);
         }
     }
 
@@ -826,14 +787,52 @@ public class Kernel {
     private static volatile int tickCount = 0;
     private static int lastDisplayedTick = -1;
     
-    // Keyboard state
-    private static volatile char lastKey = 0;
+    // Keyboard state - ring buffer for better handling
+    private static final int RING_SIZE = 256;
+    private static char[] ringBuffer = new char[RING_SIZE];
+    private static int ringHead = 0;
+    private static int ringTail = 0;
     
-    // Shell input state
-    private static char c1 = 0, c2 = 0, c3 = 0, c4 = 0, c5 = 0, c6 = 0, c7 = 0, c8 = 0;
-    private static char c9 = 0, c10 = 0, c11 = 0, c12 = 0;
+    // Shell input state (using array for larger buffer)
+    private static final int INPUT_MAX = 64;
+    private static char[] inputBuffer = new char[INPUT_MAX];
     private static int inputIndex = 0;
-    private static final int INPUT_MAX = 12;
+    
+    // ===================================================================
+    // COMMAND HISTORY (circular buffer using 1D arrays)
+    // ===================================================================
+    private static final int HISTORY_SIZE = 8;
+    private static final int HISTORY_LEN = 64;
+    // Use flat arrays instead of 2D for translator compatibility
+    private static char[] history0 = new char[HISTORY_LEN];
+    private static char[] history1 = new char[HISTORY_LEN];
+    private static char[] history2 = new char[HISTORY_LEN];
+    private static char[] history3 = new char[HISTORY_LEN];
+    private static char[] history4 = new char[HISTORY_LEN];
+    private static char[] history5 = new char[HISTORY_LEN];
+    private static char[] history6 = new char[HISTORY_LEN];
+    private static char[] history7 = new char[HISTORY_LEN];
+    private static int historyCount = 0;
+    private static int historyNext = 0;  // Next slot to write
+    
+    // Get history buffer for slot (0-7)
+    private static char[] getHistoryBuffer(int slot) {
+        if (slot == 0) return history0;
+        if (slot == 1) return history1;
+        if (slot == 2) return history2;
+        if (slot == 3) return history3;
+        if (slot == 4) return history4;
+        if (slot == 5) return history5;
+        if (slot == 6) return history6;
+        return history7;
+    }
+    
+    // ===================================================================
+    // MEMORY MONITOR (watch addresses)
+    // ===================================================================
+    private static final int WATCH_MAX = 8;
+    private static long[] watchedAddresses = new long[WATCH_MAX];
+    private static int watchCount = 0;
 
     private static void writeCharAt(char c, int x, int y) {
         long addr = 0xB8000L + (y * SCREEN_WIDTH + x) * 2L;
@@ -902,175 +901,63 @@ public class Kernel {
         cursorY = savedY;
     }
     
-    // Helper to check if buffer matches "help" (4 chars)
-    private static boolean isHelp() {
-        if (inputIndex != 4) return false;
-        if (c1 != 'h') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'l') return false;
-        if (c4 != 'p') return false;
+    // ===================================================================
+    // ARRAY-BASED STRING/INPUT UTILITIES
+    // ===================================================================
+    
+    // Compare input buffer with string (length-first match)
+    private static boolean inputEquals(String str) {
+        if (str == null) return false;
+        int len = str.length();
+        if (inputIndex != len) return false;
+        int i = 0;
+        while (i < len) {
+            if (inputBuffer[i] != str.charAt(i)) return false;
+            i = i + 1;
+        }
         return true;
     }
     
-    // Helper to check if buffer matches "clear" (5 chars)
-    private static boolean isClear() {
-        if (inputIndex != 5) return false;
-        if (c1 != 'c') return false;
-        if (c2 != 'l') return false;
-        if (c3 != 'e') return false;
-        if (c4 != 'a') return false;
-        if (c5 != 'r') return false;
+    // Check if input starts with prefix
+    private static boolean inputStartsWith(String prefix) {
+        if (prefix == null) return false;
+        int len = prefix.length();
+        if (inputIndex < len) return false;
+        int i = 0;
+        while (i < len) {
+            if (inputBuffer[i] != prefix.charAt(i)) return false;
+            i = i + 1;
+        }
         return true;
     }
     
-    // Helper to check if buffer matches "info" (4 chars)
-    private static boolean isInfo() {
-        if (inputIndex != 4) return false;
-        if (c1 != 'i') return false;
-        if (c2 != 'n') return false;
-        if (c3 != 'f') return false;
-        if (c4 != 'o') return false;
-        return true;
-    }
+    // Helper checkers using array-based comparison
+    private static boolean isHelp() { return inputEquals("help"); }
+    private static boolean isClear() { return inputEquals("clear"); }
+    private static boolean isInfo() { return inputEquals("info"); }
+    private static boolean isReboot() { return inputEquals("reboot"); }
+    private static boolean isTime() { return inputEquals("time"); }
+    private static boolean isShutdown() { return inputEquals("shutdown"); }
+    private static boolean isMem() { return inputEquals("mem"); }
+    private static boolean isVmtest() { return inputEquals("vmtest"); }
+    private static boolean isMemstat() { return inputEquals("memstat"); }
+    private static boolean isHeapstat() { return inputEquals("heapstat"); }
+    private static boolean isDump() { return inputEquals("dump"); }
+    private static boolean isSerial() { return inputEquals("serial"); }
+    private static boolean isDisktest() { return inputEquals("disktest"); }
+    private static boolean isHistory() { return inputEquals("history"); }
+    private static boolean isWatchlist() { return inputEquals("watchlist"); }
+    private static boolean isPeek() { return inputStartsWith("peek "); }
+    private static boolean isPoke() { return inputStartsWith("poke "); }
+    private static boolean isWatch() { return inputStartsWith("watch "); }
+    private static boolean isUnwatch() { return inputStartsWith("unwatch "); }
     
-    // Helper to check if buffer matches "reboot" (6 chars)
-    private static boolean isReboot() {
-        if (inputIndex != 6) return false;
-        if (c1 != 'r') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'b') return false;
-        if (c4 != 'o') return false;
-        if (c5 != 'o') return false;
-        if (c6 != 't') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "time" (4 chars)
-    private static boolean isTime() {
-        if (inputIndex != 4) return false;
-        if (c1 != 't') return false;
-        if (c2 != 'i') return false;
-        if (c3 != 'm') return false;
-        if (c4 != 'e') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "shutdown" (8 chars)
-    private static boolean isShutdown() {
-        if (inputIndex != 8) return false;
-        if (c1 != 's') return false;
-        if (c2 != 'h') return false;
-        if (c3 != 'u') return false;
-        if (c4 != 't') return false;
-        if (c5 != 'd') return false;
-        if (c6 != 'o') return false;
-        if (c7 != 'w') return false;
-        if (c8 != 'n') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "mem" (3 chars)
-    private static boolean isMem() {
-        if (inputIndex != 3) return false;
-        if (c1 != 'm') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'm') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "vmtest" (6 chars)
-    private static boolean isVmtest() {
-        if (inputIndex != 6) return false;
-        if (c1 != 'v') return false;
-        if (c2 != 'm') return false;
-        if (c3 != 't') return false;
-        if (c4 != 'e') return false;
-        if (c5 != 's') return false;
-        if (c6 != 't') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "memstat" (7 chars)
-    private static boolean isMemstat() {
-        if (inputIndex != 7) return false;
-        if (c1 != 'm') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'm') return false;
-        if (c4 != 's') return false;
-        if (c5 != 't') return false;
-        if (c6 != 'a') return false;
-        if (c7 != 't') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "heapstat" (8 chars)
-    private static boolean isHeapstat() {
-        if (inputIndex != 8) return false;
-        if (c1 != 'h') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'a') return false;
-        if (c4 != 'p') return false;
-        if (c5 != 's') return false;
-        if (c6 != 't') return false;
-        if (c7 != 'a') return false;
-        if (c8 != 't') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer matches "dump" (4 chars)
-    private static boolean isDump() {
-        if (inputIndex != 4) return false;
-        if (c1 != 'd') return false;
-        if (c2 != 'u') return false;
-        if (c3 != 'm') return false;
-        if (c4 != 'p') return false;
-        return true;
-    }
-    
-    private static boolean isSerial() {
-        if (inputIndex != 6) return false;
-        if (c1 != 's') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'r') return false;
-        if (c4 != 'i') return false;
-        if (c5 != 'a') return false;
-        if (c6 != 'l') return false;
-        return true;
-    }
-    
-    private static boolean isDisktest() {
-        if (inputIndex != 8) return false;
-        if (c1 != 'd') return false;
-        if (c2 != 'i') return false;
-        if (c3 != 's') return false;
-        if (c4 != 'k') return false;
-        if (c5 != 't') return false;
-        if (c6 != 'e') return false;
-        if (c7 != 's') return false;
-        if (c8 != 't') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer starts with "peek "
-    private static boolean isPeek() {
-        if (inputIndex < 6) return false; // "peek " + at least 1 hex char
-        if (c1 != 'p') return false;
-        if (c2 != 'e') return false;
-        if (c3 != 'e') return false;
-        if (c4 != 'k') return false;
-        if (c5 != ' ') return false;
-        return true;
-    }
-    
-    // Helper to check if buffer starts with "poke "
-    private static boolean isPoke() {
-        if (inputIndex < 8) return false; // "poke " + addr + space + value
-        if (c1 != 'p') return false;
-        if (c2 != 'o') return false;
-        if (c3 != 'k') return false;
-        if (c4 != 'e') return false;
-        if (c5 != ' ') return false;
-        return true;
+    // Get character at position (1-indexed for compatibility with old code)
+    private static char getInputChar(int pos) {
+        if (pos >= 1 && pos <= inputIndex) {
+            return inputBuffer[pos - 1];
+        }
+        return 0;
     }
     
     // Parse hex character to value, returns -1 if invalid
@@ -1081,25 +968,7 @@ public class Kernel {
         return -1;
     }
     
-    // Get character at position (1-indexed)
-    private static char getInputChar(int pos) {
-        if (pos == 1) return c1;
-        if (pos == 2) return c2;
-        if (pos == 3) return c3;
-        if (pos == 4) return c4;
-        if (pos == 5) return c5;
-        if (pos == 6) return c6;
-        if (pos == 7) return c7;
-        if (pos == 8) return c8;
-        if (pos == 9) return c9;
-        if (pos == 10) return c10;
-        if (pos == 11) return c11;
-        if (pos == 12) return c12;
-        return 0;
-    }
-    
     // Parse hex number starting at position, returns -1 if no valid hex
-    // Stores next position in static variable parseNextPos
     private static int parseNextPos = 0;
     private static long parseHex(int startPos) {
         long val = 0;
@@ -1118,6 +987,177 @@ public class Kernel {
         return val;
     }
     
+    // ===================================================================
+    // COMMAND HISTORY FUNCTIONS
+    // ===================================================================
+    
+    // Save current command to history (circular buffer)
+    private static void saveToHistory() {
+        if (inputIndex == 0) return;
+        
+        // Copy command to history slot
+        int slot = historyNext;
+        char[] histBuf = getHistoryBuffer(slot);
+        int i = 0;
+        while (i < inputIndex && i < HISTORY_LEN - 1) {
+            histBuf[i] = inputBuffer[i];
+            i = i + 1;
+        }
+        histBuf[i] = 0;  // Null terminate
+        
+        historyNext = historyNext + 1;
+        if (historyNext >= HISTORY_SIZE) {
+            historyNext = 0;
+        }
+        if (historyCount < HISTORY_SIZE) {
+            historyCount = historyCount + 1;
+        }
+    }
+    
+    // Display command history
+    private static void showHistory() {
+        writeString("Command History (");
+        writeNumber(historyCount);
+        writeString(" commands):\n");
+        
+        if (historyCount == 0) {
+            writeString("  (empty)\n");
+            return;
+        }
+        
+        // Calculate starting index (oldest command)
+        int startIdx = historyNext - historyCount;
+        if (startIdx < 0) startIdx = startIdx + HISTORY_SIZE;
+        
+        int i = 0;
+        while (i < historyCount) {
+            int idx = startIdx + i;
+            if (idx >= HISTORY_SIZE) idx = idx - HISTORY_SIZE;
+            
+            writeString("  ");
+            writeNumber(i + 1);
+            writeString(": ");
+            
+            // Print command from history array
+            char[] histBuf = getHistoryBuffer(idx);
+            int j = 0;
+            while (j < HISTORY_LEN) {
+                char c = histBuf[j];
+                if (c == 0) break;
+                writeChar(c);
+                j = j + 1;
+            }
+            writeChar('\n');
+            
+            i = i + 1;
+        }
+    }
+    
+    // ===================================================================
+    // MEMORY WATCH FUNCTIONS
+    // ===================================================================
+    
+    // Add address to watch list
+    private static void addWatch(long addr) {
+        if (watchCount >= WATCH_MAX) {
+            writeString("Watch list full (max ");
+            writeNumber(WATCH_MAX);
+            writeString(")\n");
+            return;
+        }
+        // Check if already watching
+        int i = 0;
+        while (i < watchCount) {
+            if (watchedAddresses[i] == addr) {
+                writeString("Address 0x");
+                writeHex(addr);
+                writeString(" is already being watched\n");
+                return;
+            }
+            i = i + 1;
+        }
+        watchedAddresses[watchCount] = addr;
+        watchCount = watchCount + 1;
+        writeString("Added watch for 0x");
+        writeHex(addr);
+        writeString("\n");
+    }
+    
+    // Remove address from watch list
+    private static void removeWatch(long addr) {
+        int i = 0;
+        while (i < watchCount) {
+            if (watchedAddresses[i] == addr) {
+                // Shift remaining addresses down
+                int j = i;
+                while (j < watchCount - 1) {
+                    watchedAddresses[j] = watchedAddresses[j + 1];
+                    j = j + 1;
+                }
+                watchCount = watchCount - 1;
+                writeString("Removed watch for 0x");
+                writeHex(addr);
+                writeString("\n");
+                return;
+            }
+            i = i + 1;
+        }
+        writeString("Address 0x");
+        writeHex(addr);
+        writeString(" is not in watch list\n");
+    }
+    
+    // Display watch list with current values
+    private static void showWatchlist() {
+        writeString("Watched Addresses (");
+        writeNumber(watchCount);
+        writeString("/");
+        writeNumber(WATCH_MAX);
+        writeString("):\n");
+        
+        if (watchCount == 0) {
+            writeString("  (none)\n");
+            return;
+        }
+        
+        int i = 0;
+        while (i < watchCount) {
+            long addr = watchedAddresses[i];
+            long val = readMemoryLong(addr);
+            writeString("  [");
+            writeNumber(i + 1);
+            writeString("] 0x");
+            writeHex(addr);
+            writeString(" = 0x");
+            writeHex(val);
+            writeString("\n");
+            i = i + 1;
+        }
+    }
+    
+    // ===================================================================
+    // RING BUFFER for keyboard input
+    // ===================================================================
+    
+    // Add character to ring buffer (called from interrupt handler)
+    private static void ringBufferPut(char c) {
+        int nextHead = ringHead + 1;
+        if (nextHead >= RING_SIZE) nextHead = 0;
+        if (nextHead != ringTail) {  // Only add if not full
+            ringBuffer[ringHead] = c;
+            ringHead = nextHead;
+        }
+    }
+    
+    // Get character from ring buffer (returns 0 if empty)
+    private static char ringBufferGet() {
+        if (ringHead == ringTail) return 0;  // Empty
+        char c = ringBuffer[ringTail];
+        ringTail = ringTail + 1;
+        if (ringTail >= RING_SIZE) ringTail = 0;
+        return c;
+    }
+    
     private static void writeSerialMessage(String msg) {
         if (msg == null) return;
         int i = 0;
@@ -1128,15 +1168,12 @@ public class Kernel {
         }
     }
     
-    // Native method for 32-bit port output (needed for ACPI shutdown)
-    
     // ===================================================================
     // ATA PIO DISK I/O
     // ===================================================================
     
     // Read a 16-bit word from the ATA data port
     private static int ataReadWord() {
-        // Read two bytes from data port and combine into a word
         char low = inb(ATA_DATA);
         char high = inb(ATA_DATA);
         return ((int)high << 8) | ((int)low & 0xFF);
@@ -1159,40 +1196,25 @@ public class Kernel {
     }
     
     // Read a single sector (512 bytes) using LBA28 addressing
-    // drive: 0 = master, 1 = slave
     private static void ataReadSector(int lba, int drive, long bufferAddr) {
-        // Wait for drive to be ready
         ataWaitNotBusy();
         
-        // Select drive and set upper LBA bits (bits 24-27)
         char driveSelect = (char)(0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
         outb(ATA_DRIVE_SELECT, driveSelect);
-        
-        // Small delay
         ioWait();
-        
-        // Set sector count (1 sector)
         outb(ATA_SECTOR_COUNT, (char)1);
-        
-        // Set LBA address (low, mid, high bytes)
         outb(ATA_LBA_LOW, (char)(lba & 0xFF));
         outb(ATA_LBA_MID, (char)((lba >> 8) & 0xFF));
         outb(ATA_LBA_HIGH, (char)((lba >> 16) & 0xFF));
-        
-        // Send read command
         outb(ATA_COMMAND, ATA_CMD_READ_SECTORS);
         
-        // Wait for data to be ready
         ataWaitNotBusy();
         
-        // Read 256 words (512 bytes) from data port
         int i = 0;
         long addr = bufferAddr;
         while (i < 256) {
             int word = ataReadWord();
-            // Store low byte
             writeMemory(addr, (char)(word & 0xFF));
-            // Store high byte
             writeMemory(addr + 1, (char)((word >> 8) & 0xFF));
             addr = addr + 2;
             i = i + 1;
@@ -1200,7 +1222,6 @@ public class Kernel {
     }
     
     // Read multiple sectors from disk
-    // Returns true on success, false on failure
     private static boolean readDisk(int lba, int count, long bufferAddr) {
         if (count <= 0) return false;
         if (lba < 0) return false;
@@ -1217,51 +1238,32 @@ public class Kernel {
     }
     
     private static void shutdown() {
-        // Method 1: ACPI shutdown for QEMU (port 0x604, value 0x2000)
         outl(0x604, 0x2000);
-        // Method 2: Alternative Bochs/QEMU port
         outw(0xB004, 0x2000);
-        // Method 3: isa-debug-exit device (works with -device isa-debug-exit,iobase=0xf4,iosize=0x04)
         outb(0xF4, (char) 0x00);
     }
     
     private static void resetBuffer() {
-        c1 = 0; c2 = 0; c3 = 0; c4 = 0; c5 = 0; c6 = 0;
-        c7 = 0; c8 = 0; c9 = 0; c10 = 0; c11 = 0; c12 = 0;
+        int i = 0;
+        while (i < INPUT_MAX) {
+            inputBuffer[i] = 0;
+            i = i + 1;
+        }
         inputIndex = 0;
     }
     
     private static void addToBuffer(char c) {
-        if (inputIndex == 0) c1 = c;
-        else if (inputIndex == 1) c2 = c;
-        else if (inputIndex == 2) c3 = c;
-        else if (inputIndex == 3) c4 = c;
-        else if (inputIndex == 4) c5 = c;
-        else if (inputIndex == 5) c6 = c;
-        else if (inputIndex == 6) c7 = c;
-        else if (inputIndex == 7) c8 = c;
-        else if (inputIndex == 8) c9 = c;
-        else if (inputIndex == 9) c10 = c;
-        else if (inputIndex == 10) c11 = c;
-        else if (inputIndex == 11) c12 = c;
-        inputIndex = inputIndex + 1;
+        if (inputIndex < INPUT_MAX) {
+            inputBuffer[inputIndex] = c;
+            inputIndex = inputIndex + 1;
+        }
     }
     
     private static void backspaceBuffer() {
-        if (inputIndex == 0) return;
-        inputIndex = inputIndex - 1;
-        if (inputIndex == 0) c1 = 0;
-        else if (inputIndex == 1) c2 = 0;
-        else if (inputIndex == 2) c3 = 0;
-        else if (inputIndex == 3) c4 = 0;
-        else if (inputIndex == 4) c5 = 0;
-        else if (inputIndex == 5) c6 = 0;
-        else if (inputIndex == 6) c7 = 0;
-        else if (inputIndex == 7) c8 = 0;
-        else if (inputIndex == 8) c9 = 0;
-        else if (inputIndex == 9) c10 = 0;
-        else if (inputIndex == 10) c11 = 0;
-        else if (inputIndex == 11) c12 = 0;
+        if (inputIndex > 0) {
+            inputIndex = inputIndex - 1;
+            inputBuffer[inputIndex] = 0;
+        }
     }
     
     // Write a byte as 2-digit hex (for memory dump)
@@ -1314,7 +1316,6 @@ public class Kernel {
             int i = 0;
             while (i < 16) {
                 long byteAddr = lineAddr + i;
-                // Read as a char (byte) from memory
                 char b = (char)(readMemoryLong(byteAddr) & 0xFFL);
                 writeHexByte((int)b);
                 writeChar(' ');
@@ -1343,35 +1344,42 @@ public class Kernel {
     private static void executeCommand() {
         writeChar('\n');
         
+        // Save command to history before executing
+        saveToHistory();
+        
         if (inputIndex == 0) {
             // Empty command, just show prompt
         } else if (isHelp()) {
             writeString("Available commands:\n");
-            writeString("  help    - Show this help message\n");
-            writeString("  clear   - Clear the screen\n");
-            writeString("  info    - Show system information\n");
-            writeString("  reboot  - Restart the system\n");
-            writeString("  time    - Show timer tick count\n");
-            writeString("  mem     - Show memory statistics\n");
-            writeString("  memstat - Show detailed memory stats\n");
-            writeString("  heapstat- Show heap statistics\n");
-            writeString("  dump    - Dump VGA memory (0xB8000)\n");
-            writeString("  vmtest  - Test virtual memory mapping\n");
-            writeString("  serial  - Send test message to COM1 serial port\n");
-            writeString("  disktest- Read and display boot sector\n");
-            writeString("  peek    - Read memory (e.g., peek B8000)\n");
-            writeString("  poke    - Write memory (e.g., poke B8000 1234)\n");
-            writeString("  shutdown- Power off (requires isa-debug-exit)\n");
+            writeString("  help      - Show this help message\n");
+            writeString("  clear     - Clear the screen\n");
+            writeString("  info      - Show system information\n");
+            writeString("  reboot    - Restart the system\n");
+            writeString("  time      - Show timer tick count\n");
+            writeString("  mem       - Show memory statistics\n");
+            writeString("  memstat   - Show detailed memory stats\n");
+            writeString("  heapstat  - Show heap statistics\n");
+            writeString("  dump      - Dump VGA memory (0xB8000)\n");
+            writeString("  vmtest    - Test virtual memory mapping\n");
+            writeString("  serial    - Send test message to COM1\n");
+            writeString("  disktest  - Read and display boot sector\n");
+            writeString("  peek      - Read memory (e.g., peek B8000)\n");
+            writeString("  poke      - Write memory (e.g., poke B8000 1234)\n");
+            writeString("  history   - Show command history\n");
+            writeString("  watch     - Watch memory address (e.g., watch B8000)\n");
+            writeString("  unwatch   - Stop watching address\n");
+            writeString("  watchlist - Show watched addresses and values\n");
+            writeString("  shutdown  - Power off\n");
         } else if (isClear()) {
             clearScreen();
         } else if (isInfo()) {
-            writeString("JavaOS Kernel v0.5\n");
+            writeString("JavaOS Kernel v0.6\n");
             writeString("Architecture: x86-64\n");
             writeString("Language: Java + C + ASM\n");
+            writeString("Features: Arrays, Ring Buffer, History, Watch\n");
             writeString("Timer: 100Hz\n");
         } else if (isReboot()) {
             writeString("Rebooting...\n");
-            // Triple fault via invalid IDT
             loadIDT();
         } else if (isTime()) {
             writeString("Timer running. Check the spinner at top-right!\n");
@@ -1395,7 +1403,6 @@ public class Kernel {
             writeString("Message sent to COM1.\n");
         } else if (isDisktest()) {
             writeString("Reading boot sector (LBA 0)...\n");
-            // Allocate a buffer on the heap for sector data (512 bytes)
             long buffer = heapAlloc(512);
             if (buffer == 0) {
                 writeString("FAIL: Could not allocate buffer\n");
@@ -1404,12 +1411,10 @@ public class Kernel {
                 if (success) {
                     writeString("Boot sector read successfully.\n");
                     writeString("First 64 bytes in hex:\n");
-                    // Dump first 64 bytes (4 lines of 16 bytes)
                     dumpMemory(buffer, 4);
                 } else {
                     writeString("FAIL: Could not read boot sector\n");
                 }
-                // Free the buffer
                 heapFree(buffer);
             }
         } else if (isPeek()) {
@@ -1430,7 +1435,6 @@ public class Kernel {
                 writeString("Usage: poke <hexaddr> <hexvalue>\n");
             } else {
                 int next = parseNextPos;
-                // Skip space
                 if (next <= inputIndex && getInputChar(next) == ' ') {
                     next = next + 1;
                     long val = parseHex(next);
@@ -1448,11 +1452,28 @@ public class Kernel {
                     writeString("Usage: poke <hexaddr> <hexvalue>\n");
                 }
             }
+        } else if (isHistory()) {
+            showHistory();
+        } else if (isWatch()) {
+            long addr = parseHex(6); // After "watch "
+            if (addr < 0) {
+                writeString("Usage: watch <hexaddr>\n");
+            } else {
+                addWatch(addr);
+            }
+        } else if (isUnwatch()) {
+            long addr = parseHex(8); // After "unwatch "
+            if (addr < 0) {
+                writeString("Usage: unwatch <hexaddr>\n");
+            } else {
+                removeWatch(addr);
+            }
+        } else if (isWatchlist()) {
+            showWatchlist();
         } else {
             writeString("Unknown command. Type 'help' for available commands.\n");
         }
         
-        // Reset buffer
         resetBuffer();
         writeString("> ");
     }
@@ -1518,7 +1539,7 @@ public class Kernel {
         outb(PIT_CHANNEL0, (char) 0x2E);
     }
 
-    // Convert scancode to ASCII - now in Java!
+    // Convert scancode to ASCII
     private static char scancodeToAscii(char scancode) {
         if (scancode == 0x1E) return 'a';
         if (scancode == 0x30) return 'b';
@@ -1563,7 +1584,6 @@ public class Kernel {
     }
 
     // Called from interrupt context in C for ALL interrupts
-    // Java handles ALL dispatch logic!
     public static void handleInterrupt(int vector) {
         if (vector == 32) {
             // Timer interrupt (IRQ0 -> vector 32)
@@ -1576,15 +1596,13 @@ public class Kernel {
             if (scancode < 128) {
                 char ascii = scancodeToAscii(scancode);
                 if (ascii != 0) {
-                    lastKey = ascii;
+                    ringBufferPut(ascii);
                 }
             }
             sendEOI(1);
         } else if (vector >= 32 && vector <= 47) {
-            // Other hardware IRQs
             sendEOI(vector - 32);
         } else if (vector < 32) {
-            // CPU exception - display error and halt
             disableInterrupts();
             writeCharAt('E', 0, 0);
             char hexDigit = (vector < 10) ? (char) ('0' + vector) : (char) ('A' + vector - 10);
@@ -1605,7 +1623,7 @@ public class Kernel {
     public static void startKernel(long dummy) {
         clearScreen();
         
-        writeString("JavaOS Kernel v0.5\n");
+        writeString("JavaOS Kernel v0.6\n");
         writeString("==================\n\n");
         
         writeString("Initializing from Java...\n");
@@ -1613,7 +1631,7 @@ public class Kernel {
         
         writeString("Interrupts enabled!\n");
         writeString("Timer: 100Hz\n");
-        writeString("Keyboard: enabled\n");
+        writeString("Keyboard: enabled (ring buffer)\n");
         writeString("Dispatch: Java\n\n");
         writeString("Type 'help' for available commands.\n\n");
         
@@ -1650,18 +1668,14 @@ public class Kernel {
                 writeMemory(addr + 1, (char) 0x0E);
             }
             
-            if (lastKey != 0) {
-                char key = lastKey;
-                lastKey = 0;
-                
+            // Process keys from ring buffer
+            char key = ringBufferGet();
+            while (key != 0) {
                 if (key == '\n') {
-                    // Execute command
                     executeCommand();
                 } else if (key == '\b') {
-                    // Backspace - delete last character
                     if (inputIndex > 0) {
                         backspaceBuffer();
-                        // Erase character from screen
                         cursorX = cursorX - 1;
                         if (cursorX < 0) {
                             cursorX = SCREEN_WIDTH - 1;
@@ -1670,10 +1684,10 @@ public class Kernel {
                         writeCharAt(' ', cursorX, cursorY);
                     }
                 } else if (inputIndex < INPUT_MAX && key >= 32 && key <= 126) {
-                    // Regular printable character - add to buffer and echo
                     addToBuffer(key);
                     writeChar(key);
                 }
+                key = ringBufferGet();
             }
         }
     }
