@@ -1447,6 +1447,25 @@ public class Kernel {
         }
         writeString("\n");
         
+        // Manual read to debug
+        writeString("  Manual read at offset 8: ");
+        long addr8 = buffer + 8;
+        int b0 = (int)readMemoryByte(addr8) & 0xFF;
+        int b1 = (int)readMemoryByte(addr8 + 1) & 0xFF;
+        int b2 = (int)readMemoryByte(addr8 + 2) & 0xFF;
+        int b3 = (int)readMemoryByte(addr8 + 3) & 0xFF;
+        writeHexByte(b0);
+        writeString(" ");
+        writeHexByte(b1);
+        writeString(" ");
+        writeHexByte(b2);
+        writeString(" ");
+        writeHexByte(b3);
+        int manualCodeSize = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+        writeString(" = ");
+        writeNumber(manualCodeSize);
+        writeString("\n");
+        
         int entryOffset = readUInt32(buffer, 4);
         int codeSize = readUInt32(buffer, 8);
         int dataSize = readUInt32(buffer, 12);
