@@ -1438,6 +1438,15 @@ public class Kernel {
         }
         writeString("  SBF magic OK\n");
         
+        writeString("  Buffer at offset 8: ");
+        int k = 8;
+        while (k < 16) {
+            writeHexByte((int)readMemoryByte(buffer + k));
+            writeString(" ");
+            k = k + 1;
+        }
+        writeString("\n");
+        
         int entryOffset = readUInt32(buffer, 4);
         int codeSize = readUInt32(buffer, 8);
         int dataSize = readUInt32(buffer, 12);
