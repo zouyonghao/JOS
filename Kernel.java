@@ -1509,12 +1509,7 @@ public class Kernel {
         writeNumber(SFROFS_SUPERBLOCK_SECTOR);
         writeString("...\n");
         
-        // Try reading twice (workaround for ATA timing issues)
         boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
-        if (!success || readMemoryByte(buffer) == 0) {
-            writeString("  Retry read...\n");
-            success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
-        }
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
@@ -1522,37 +1517,19 @@ public class Kernel {
             return;
         }
         
+        // Simple debug: just print first 4 bytes as chars
+        writeString("  Data: ");
+        writeChar(readMemoryByte(buffer));
+        writeChar(readMemoryByte(buffer + 1));
+        writeChar(readMemoryByte(buffer + 2));
+        writeChar(readMemoryByte(buffer + 3));
+        writeString("\n");
+        
         // Verify magic number
         char magic0 = readMemoryByte(buffer);
         char magic1 = readMemoryByte(buffer + 1);
         char magic2 = readMemoryByte(buffer + 2);
         char magic3 = readMemoryByte(buffer + 3);
-        
-        // Debug: print first 16 bytes of buffer
-        writeString("  Buffer bytes: ");
-        int j = 0;
-        while (j < 16) {
-            writeHexByte((int)readMemoryByte(buffer + j));
-            writeString(" ");
-            j = j + 1;
-        }
-        writeString("\n");
-        
-        // Debug: print what we read
-        writeString("  Magic read: ");
-        writeChar(magic0);
-        writeChar(magic1);
-        writeChar(magic2);
-        writeChar(magic3);
-        writeString(" (hex: ");
-        writeHexByte((int)magic0);
-        writeString(" ");
-        writeHexByte((int)magic1);
-        writeString(" ");
-        writeHexByte((int)magic2);
-        writeString(" ");
-        writeHexByte((int)magic3);
-        writeString(")\n");
         
         if (magic0 != SFROFS_MAGIC_0 || magic1 != SFROFS_MAGIC_1 ||
             magic2 != SFROFS_MAGIC_2 || magic3 != SFROFS_MAGIC_3) {
