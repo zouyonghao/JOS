@@ -365,7 +365,7 @@ public class JavaToLLVM {
         emit("  br label %bb_0");
 
         // Translate bytecodes
-        translateMethod(m, localTypes);
+        translateMethod(m, localTypes, retType);
 
         emit("}");
     }
@@ -376,7 +376,7 @@ public class JavaToLLVM {
 
     static boolean lastWasTerminator;
 
-    static void translateMethod(MethodInfo m, char[] localTypes) {
+    static void translateMethod(MethodInfo m, char[] localTypes, String retType) {
         byte[] code = m.code;
         Set<Integer> blockStarts = discoverBasicBlocks(code);
         lastWasTerminator = true; // entry br is a terminator
@@ -646,7 +646,14 @@ public class JavaToLLVM {
                 case 0xAC: // ireturn
                 {
                     String val = pop();
-                    emit("  ret i32 " + val);
+                    if (retType.equals("i1")) {
+                        // Boolean return - truncate i32 to i1
+                        String tmp = nextSSA();
+                        emit("  " + tmp + " = trunc i32 " + val + " to i1");
+                        emit("  ret i1 " + tmp);
+                    } else {
+                        emit("  ret i32 " + val);
+                    }
                     pc++; break;
                 }
                 case 0xAD: // lreturn
@@ -881,7 +888,14 @@ public class JavaToLLVM {
             }
             call.append(")");
             emit(call.toString());
-            push(r, retType.equals("i64") ? 'l' : retType.equals("i8*") ? 'p' : 'i');
+            // If return type is boolean (i1), zero-extend to i32 for Java compatibility
+            if (retType.equals("i1")) {
+                String ext = nextSSA();
+                emit("  " + ext + " = zext i1 " + r + " to i32");
+                push(ext, 'i');
+            } else {
+                push(r, retType.equals("i64") ? 'l' : retType.equals("i8*") ? 'p' : 'i');
+            }
         } else {
             call.append("  call void @").append(mangledName).append("(");
             for (int i = 0; i < params.size(); i++) {

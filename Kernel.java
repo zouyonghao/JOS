@@ -47,6 +47,12 @@ public class Kernel {
     
     // Keyboard state
     private static volatile char lastKey = 0;
+    
+    // Shell input state
+    private static char c1 = 0, c2 = 0, c3 = 0, c4 = 0, c5 = 0, c6 = 0, c7 = 0, c8 = 0;
+    private static char c9 = 0, c10 = 0, c11 = 0, c12 = 0;
+    private static int inputIndex = 0;
+    private static final int INPUT_MAX = 12;
 
     private static void writeCharAt(char c, int x, int y) {
         long addr = 0xB8000L + (y * SCREEN_WIDTH + x) * 2L;
@@ -102,6 +108,143 @@ public class Kernel {
             writeChar(str.charAt(i));
             i = i + 1;
         }
+    }
+    
+    private static void writeStringAt(String str, int x, int y) {
+        if (str == null) return;
+        int savedX = cursorX;
+        int savedY = cursorY;
+        cursorX = x;
+        cursorY = y;
+        writeString(str);
+        cursorX = savedX;
+        cursorY = savedY;
+    }
+    
+    // Helper to check if buffer matches "help" (4 chars)
+    private static boolean isHelp() {
+        if (inputIndex != 4) return false;
+        if (c1 != 'h') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'l') return false;
+        if (c4 != 'p') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "clear" (5 chars)
+    private static boolean isClear() {
+        if (inputIndex != 5) return false;
+        if (c1 != 'c') return false;
+        if (c2 != 'l') return false;
+        if (c3 != 'e') return false;
+        if (c4 != 'a') return false;
+        if (c5 != 'r') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "info" (4 chars)
+    private static boolean isInfo() {
+        if (inputIndex != 4) return false;
+        if (c1 != 'i') return false;
+        if (c2 != 'n') return false;
+        if (c3 != 'f') return false;
+        if (c4 != 'o') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "reboot" (6 chars)
+    private static boolean isReboot() {
+        if (inputIndex != 6) return false;
+        if (c1 != 'r') return false;
+        if (c2 != 'e') return false;
+        if (c3 != 'b') return false;
+        if (c4 != 'o') return false;
+        if (c5 != 'o') return false;
+        if (c6 != 't') return false;
+        return true;
+    }
+    
+    // Helper to check if buffer matches "time" (4 chars)
+    private static boolean isTime() {
+        if (inputIndex != 4) return false;
+        if (c1 != 't') return false;
+        if (c2 != 'i') return false;
+        if (c3 != 'm') return false;
+        if (c4 != 'e') return false;
+        return true;
+    }
+    
+    private static void resetBuffer() {
+        c1 = 0; c2 = 0; c3 = 0; c4 = 0; c5 = 0; c6 = 0;
+        c7 = 0; c8 = 0; c9 = 0; c10 = 0; c11 = 0; c12 = 0;
+        inputIndex = 0;
+    }
+    
+    private static void addToBuffer(char c) {
+        if (inputIndex == 0) c1 = c;
+        else if (inputIndex == 1) c2 = c;
+        else if (inputIndex == 2) c3 = c;
+        else if (inputIndex == 3) c4 = c;
+        else if (inputIndex == 4) c5 = c;
+        else if (inputIndex == 5) c6 = c;
+        else if (inputIndex == 6) c7 = c;
+        else if (inputIndex == 7) c8 = c;
+        else if (inputIndex == 8) c9 = c;
+        else if (inputIndex == 9) c10 = c;
+        else if (inputIndex == 10) c11 = c;
+        else if (inputIndex == 11) c12 = c;
+        inputIndex = inputIndex + 1;
+    }
+    
+    private static void backspaceBuffer() {
+        if (inputIndex == 0) return;
+        inputIndex = inputIndex - 1;
+        if (inputIndex == 0) c1 = 0;
+        else if (inputIndex == 1) c2 = 0;
+        else if (inputIndex == 2) c3 = 0;
+        else if (inputIndex == 3) c4 = 0;
+        else if (inputIndex == 4) c5 = 0;
+        else if (inputIndex == 5) c6 = 0;
+        else if (inputIndex == 6) c7 = 0;
+        else if (inputIndex == 7) c8 = 0;
+        else if (inputIndex == 8) c9 = 0;
+        else if (inputIndex == 9) c10 = 0;
+        else if (inputIndex == 10) c11 = 0;
+        else if (inputIndex == 11) c12 = 0;
+    }
+    
+    private static void executeCommand() {
+        writeChar('\n');
+        
+        if (inputIndex == 0) {
+            // Empty command, just show prompt
+        } else if (isHelp()) {
+            writeString("Available commands:\n");
+            writeString("  help    - Show this help message\n");
+            writeString("  clear   - Clear the screen\n");
+            writeString("  info    - Show system information\n");
+            writeString("  reboot  - Restart the system\n");
+            writeString("  time    - Show timer tick count\n");
+        } else if (isClear()) {
+            clearScreen();
+        } else if (isInfo()) {
+            writeString("JavaOS Kernel v0.5\n");
+            writeString("Architecture: x86-64\n");
+            writeString("Language: Java + C + ASM\n");
+            writeString("Timer: 100Hz\n");
+        } else if (isReboot()) {
+            writeString("Rebooting...\n");
+            // Triple fault via invalid IDT
+            loadIDT();
+        } else if (isTime()) {
+            writeString("Timer running. Check the spinner at top-right!\n");
+        } else {
+            writeString("Unknown command. Type 'help' for available commands.\n");
+        }
+        
+        // Reset buffer
+        resetBuffer();
+        writeString("> ");
     }
 
     // Initialize IDT - set up all 48 gates
@@ -204,7 +347,8 @@ public class Kernel {
         if (scancode == 0x0A) return '9';
         if (scancode == 0x0B) return '0';
         if (scancode == 0x39) return ' ';
-        if (scancode == 0x1C) return '\n';
+        if (scancode == 0x1C) return '\n';  // Enter
+        if (scancode == 0x0E) return '\b';  // Backspace
         return 0;
     }
 
@@ -261,7 +405,8 @@ public class Kernel {
         writeString("Timer: 100Hz\n");
         writeString("Keyboard: enabled\n");
         writeString("Dispatch: Java\n\n");
-        writeString("Type something:\n\n");
+        writeString("Type 'help' for available commands.\n\n");
+        writeString("> ");
         
         int lastTick = 0;
         while (true) {
@@ -283,8 +428,29 @@ public class Kernel {
             }
             
             if (lastKey != 0) {
-                writeChar(lastKey);
+                char key = lastKey;
                 lastKey = 0;
+                
+                if (key == '\n') {
+                    // Execute command
+                    executeCommand();
+                } else if (key == '\b') {
+                    // Backspace - delete last character
+                    if (inputIndex > 0) {
+                        backspaceBuffer();
+                        // Erase character from screen
+                        cursorX = cursorX - 1;
+                        if (cursorX < 0) {
+                            cursorX = SCREEN_WIDTH - 1;
+                            cursorY = cursorY - 1;
+                        }
+                        writeCharAt(' ', cursorX, cursorY);
+                    }
+                } else if (inputIndex < INPUT_MAX && key >= 32 && key <= 126) {
+                    // Regular printable character - add to buffer and echo
+                    addToBuffer(key);
+                    writeChar(key);
+                }
             }
         }
     }
