@@ -1604,14 +1604,33 @@ public class Kernel {
         }
         
         // Parse file entries
+        writeString("  Reading file table...\n");
         int i = 0;
         while (i < fsNumFiles) {
             long entryAddr = tableBuffer + (i * SFROFS_ENTRY_SIZE);
+            
+            // Debug: print first 8 bytes of entry
+            writeString("  Entry ");
+            writeNumber(i);
+            writeString(" bytes: ");
+            int k = 0;
+            while (k < 8) {
+                writeHexByte((int)readMemoryByte(entryAddr + k));
+                writeString(" ");
+                k = k + 1;
+            }
+            writeString("\n");
             
             // Read filename
             fsFileNameLengths[i] = readFilename(entryAddr, 0, i);
             fsFileStartSectors[i] = readUInt32(entryAddr, 48);
             fsFileSizes[i] = readUInt32(entryAddr, 52);
+            
+            writeString("    Name len: ");
+            writeNumber(fsFileNameLengths[i]);
+            writeString(" size: ");
+            writeNumber(fsFileSizes[i]);
+            writeString("\n");
             
             i = i + 1;
         }
@@ -1730,9 +1749,9 @@ public class Kernel {
     
     // Read a 16-bit word from the ATA data port
     private static int ataReadWord() {
-        char low = inb(ATA_DATA);
-        char high = inb(ATA_DATA);
-        return ((int)high << 8) | ((int)low & 0xFF);
+        // Read 16-bit word from ATA data port
+        // Using inw is more reliable than two inb calls
+        return inw(ATA_DATA);
     }
     
     // Alternative: read byte by byte
@@ -2239,6 +2258,7 @@ public class Kernel {
         if (scancode == 0x39) return ' ';
         if (scancode == 0x1C) return '\n';  // Enter
         if (scancode == 0x0E) return '\b';  // Backspace
+        if (scancode == 0x34) return '.';  // Period
         return 0;
     }
 
