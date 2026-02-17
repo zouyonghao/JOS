@@ -1181,7 +1181,7 @@ public class Kernel {
     
     // SFROFS constants
     private static final int SFROFS_SECTOR_SIZE = 512;
-    private static final int SFROFS_SUPERBLOCK_SECTOR = 1;
+    private static final int SFROFS_SUPERBLOCK_SECTOR = 2048;  // 1MB offset for filesystem
     private static final int SFROFS_MAGIC_0 = 'S';  // S
     private static final int SFROFS_MAGIC_1 = 'F';  // F
     private static final int SFROFS_MAGIC_2 = 'R';  // R
@@ -1402,7 +1402,7 @@ public class Kernel {
         
         // Read file from disk
         int sectors = (fileSize + SFROFS_SECTOR_SIZE - 1) / SFROFS_SECTOR_SIZE;
-        boolean success = readDataDisk(startSector, sectors, buffer);
+        boolean success = readDisk(startSector, sectors, buffer);
         if (!success) {
             writeString("ERROR: Could not read binary file from disk\n");
             heapFree(buffer);
@@ -1503,8 +1503,8 @@ public class Kernel {
         // Read superblock from sector 1 (data disk drive 1)
         writeString("  Reading sector ");
         writeNumber(SFROFS_SUPERBLOCK_SECTOR);
-        writeString(" from drive 1...\n");
-        boolean success = readDataDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
+        writeString(" from drive 0...\n");
+        boolean success = readDisk(SFROFS_SUPERBLOCK_SECTOR, 1, buffer);
         if (!success) {
             writeString("ERROR: Could not read superblock\n");
             heapFree(buffer);
@@ -1595,7 +1595,7 @@ public class Kernel {
         }
         
         // Read file table from sector 2 (data disk drive 1)
-        success = readDataDisk(2, tableSectors, tableBuffer);
+        success = readDisk(SFROFS_SUPERBLOCK_SECTOR + 1, tableSectors, tableBuffer);
         if (!success) {
             writeString("ERROR: Could not read file table\n");
             heapFree(tableBuffer);

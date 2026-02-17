@@ -75,22 +75,14 @@ test-command: BB.bin
 disk: BB.bin
 	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf
 	@echo "Created $(BUILDDIR)/disk.img"
+	# Embed filesystem into kernel disk image at 1MB offset
+	python3 embed_fs.py $(BUILDDIR)/BB.bin $(BUILDDIR)/disk.img
+	@echo "Embedded filesystem into $(BUILDDIR)/BB.bin"
 
 # Run QEMU with disk image (for testing user programs)
-# Create a combined disk with kernel + filesystem
-COMBINED_DISK = $(BUILDDIR)/combined.img
-
-$(COMBINED_DISK): BB.bin disk
-	# Create a 2MB disk image
-	dd if=/dev/zero of=$@ bs=1M count=2 2>/dev/null
-	# Copy kernel to first 64KB
-	dd if=$(BUILDDIR)/BB.bin of=$@ conv=notrunc bs=512 2>/dev/null
-	# Copy filesystem starting at 1MB (sector 2048)
-	dd if=$(BUILDDIR)/disk.img of=$@ conv=notrunc bs=512 seek=2048 2>/dev/null
-	@echo "Created combined disk image"
-
-qemu-disk: $(COMBINED_DISK)
-	$(QEMUCMD) $(QEMUFLAGS)$(COMBINED_DISK)
+# Filesystem is embedded in the kernel disk image at 1MB offset (sector 2048)
+qemu-disk: disk
+	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin)
 
 # Read filesystem from same drive (drive 0) at offset 2048 (1MB)
 # This requires kernel changes to read from sector 2048+
