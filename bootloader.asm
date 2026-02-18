@@ -231,7 +231,7 @@ lmode:
 	mov rbp, rsp		# initialize stack to top of kernel memory
 
 	# Call Java kernel entry point
-	call Kernel_startKernel_Long
+	call kernel_Core_startKernel_Long
 
 	# If we get here, the kernel returned successfully
 	cli

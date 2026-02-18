@@ -5,14 +5,14 @@
 // Malloc/Free - using kernel's heap allocator
 // =============================================================================
 
-extern int64_t Kernel_heapAlloc_Long(int64_t size);
-extern void Kernel_heapFree_Long(int64_t ptr);
+extern int64_t kernel_Memory_heapAlloc_Long(int64_t size);
+extern void kernel_Memory_heapFree_Long(int64_t ptr);
 
 void* malloc(size_t size) {
   // The kernel's heapAlloc adds an 8-byte header, but for arrays
   // the translator expects: [8-byte length | elements]
   // So we just allocate the requested size + 8 for the length header
-  int64_t ptr = Kernel_heapAlloc_Long((int64_t)size + 8);
+  int64_t ptr = kernel_Memory_heapAlloc_Long((int64_t)size + 8);
   if (ptr == 0) return NULL;
   // Return pointer to the element area (after length header)
   return (void*)(ptr + 8);
@@ -21,7 +21,7 @@ void* malloc(size_t size) {
 void free(void* ptr) {
   if (ptr == NULL) return;
   // Go back to the actual allocation start (before the length header)
-  Kernel_heapFree_Long((int64_t)ptr - 8);
+  kernel_Memory_heapFree_Long((int64_t)ptr - 8);
 }
 
 // =============================================================================
@@ -34,7 +34,7 @@ static void serial_write(char c) {
   __asm__ volatile("outb %0, %1" : : "a"(c), "Nd"((uint16_t)SERIAL_PORT));
 }
 
-void Kernel_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
+void kernel_Native_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
   // VGA memory: write with serial output for debugging
   if (addr >= 0xB8000 && addr <= 0xB8F9F) {
     if ((addr - 0xB8000) % 2 == 0) {
@@ -53,7 +53,7 @@ void Kernel_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
 // Native method: Kernel.writeSerial(char)
 // =============================================================================
 
-void Kernel_writeSerial_Char(int32_t c) {
+void kernel_Native_writeSerial_Char(int32_t c) {
   serial_write((char)c);
 }
 
@@ -124,7 +124,7 @@ static inline uint8_t inb(uint16_t port) {
 }
 
 // External Java method for interrupt handling - Java does ALL dispatch logic
-extern void Kernel_handleInterrupt_Int(int32_t vector);
+extern void kernel_Interrupts_handleInterrupt_Int(int32_t vector);
 
 // External Java globals for syscall args
 extern int64_t Kernel_syscallNum;
@@ -139,32 +139,32 @@ extern int64_t Kernel_syscallRet;
 // The assembly stub also restores the return value from Java back to RAX
 // AFTER this function returns (in the interrupt epilogue).
 void interrupt_dispatch(uint64_t vector) {
-  Kernel_handleInterrupt_Int((int32_t)vector);
+  kernel_Interrupts_handleInterrupt_Int((int32_t)vector);
 }
 
 // =============================================================================
 // Native methods exposed to Java (direct implementations)
 // =============================================================================
 
-int32_t Kernel_inb_Int(int32_t port) {
+int32_t kernel_Native_inb_Int(int32_t port) {
   return (int32_t)inb((uint16_t)port);
 }
 
-int32_t Kernel_inw_Int(int32_t port) {
+int32_t kernel_Native_inw_Int(int32_t port) {
   uint16_t value;
   __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"((uint16_t)port));
   return (int32_t)value;
 }
 
-void Kernel_outb_Int_Char(int32_t port, int32_t data) {
+void kernel_Native_outb_Int_Char(int32_t port, int32_t data) {
   outb((uint16_t)port, (uint8_t)data);
 }
 
-void Kernel_outw_Int_Int(int32_t port, int32_t data) {
+void kernel_Native_outw_Int_Int(int32_t port, int32_t data) {
   __asm__ volatile("outw %0, %w1" : : "a"((uint16_t)data), "d"((uint16_t)port));
 }
 
-void Kernel_outl_Int_Int(int32_t port, int32_t data) {
+void kernel_Native_outl_Int_Int(int32_t port, int32_t data) {
   // outl requires port in dx register, data in eax
   uint16_t port16 = (uint16_t)port;
   __asm__ volatile("outl %0, %w1" : : "a"(data), "d"(port16));
@@ -174,11 +174,11 @@ void Kernel_outl_Int_Int(int32_t port, int32_t data) {
 // Memory access (64-bit)
 // =============================================================================
 
-int64_t Kernel_readMemoryLong_Long(int64_t addr) {
+int64_t kernel_Native_readMemoryLong_Long(int64_t addr) {
   return *(int64_t*)addr;
 }
 
-void Kernel_writeMemoryLong_Long_Long(int64_t addr, int64_t data) {
+void kernel_Native_writeMemoryLong_Long_Long(int64_t addr, int64_t data) {
   *(int64_t*)addr = data;
 }
 
@@ -186,24 +186,24 @@ void Kernel_writeMemoryLong_Long_Long(int64_t addr, int64_t data) {
 // Paging control
 // =============================================================================
 
-int64_t Kernel_getCR3_V(void) {
+int64_t kernel_Native_getCR3_V(void) {
   int64_t val;
   __asm__ volatile("mov %%cr3, %0" : "=r"(val));
   return val;
 }
 
-void Kernel_setCR3_Long(int64_t val) {
+void kernel_Native_setCR3_Long(int64_t val) {
   __asm__ volatile("mov %0, %%cr3" : : "r"(val));
 }
 
-void Kernel_enablePaging_V(void) {
+void kernel_Native_enablePaging_V(void) {
   int64_t cr0;
   __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
   cr0 |= 0x80000000;  // Set PG bit
   __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
 }
 
-void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {
+void kernel_Native_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {
   (void)handlerAddr;  // Unused - we get addresses from isr_stub_table
   if (vector >= 0 && vector < 48) {
     idt_set_gate(vector, isr_stub_table[vector], (uint8_t)typeAttr);
@@ -214,27 +214,27 @@ void Kernel_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_
   }
 }
 
-void Kernel_loadIDT_V(void) {
+void kernel_Native_loadIDT_V(void) {
   idt_load();
 }
 
-void Kernel_sendEOI_Int(int32_t irq) {
+void kernel_Native_sendEOI_Int(int32_t irq) {
   pic_send_eoi((uint8_t)irq);
 }
 
-void Kernel_enableInterrupts_V(void) {
+void kernel_Native_enableInterrupts_V(void) {
   enable_interrupts();
 }
 
-void Kernel_disableInterrupts_V(void) {
+void kernel_Native_disableInterrupts_V(void) {
   disable_interrupts();
 }
 
-int64_t Kernel_getTicks_V(void) {
+int64_t kernel_Native_getTicks_V(void) {
   return timer_ticks;
 }
 
-void Kernel_incTicks_V(void) {
+void kernel_Native_incTicks_V(void) {
   timer_ticks++;
 }
 
@@ -243,7 +243,7 @@ void Kernel_incTicks_V(void) {
 // Call a loaded binary program at the given entry point
 // =============================================================================
 
-void Kernel_callProgram_Long(int64_t entryPoint) {
+void kernel_Native_callProgram_Long(int64_t entryPoint) {
   // Cast entryPoint to function pointer and call it
   void (*prog)() = (void (*)())entryPoint;
   prog();

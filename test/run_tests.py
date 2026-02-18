@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_boot import BootTest
 from test_memory import MemoryTest
 from test_command import CommandTest
+from test_pe_loader import QEMUPETest
 
 
 class Colors:
@@ -91,7 +92,7 @@ class TestRunner:
         start = time.time()
         
         try:
-            # Run make clean && make
+            # Run make clean && make disk (to include filesystem)
             result = subprocess.run(
                 ["make", "clean"],
                 capture_output=True,
@@ -100,7 +101,7 @@ class TestRunner:
             )
             
             result = subprocess.run(
-                ["make"],
+                ["make", "disk"],
                 capture_output=True,
                 text=True,
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -182,10 +183,12 @@ class TestRunner:
         # Run tests with small delay between them to ensure cleanup
         import time
         self.results.append(self.run_test("boot", BootTest))
-        time.sleep(0.5)
+        time.sleep(1)
         self.results.append(self.run_test("memory", MemoryTest))
-        time.sleep(0.5)
+        time.sleep(1)
         self.results.append(self.run_test("command", CommandTest))
+        time.sleep(1)
+        self.results.append(self.run_test("pe", QEMUPETest))
         
         # Print summary
         return self.print_summary()
@@ -244,7 +247,7 @@ Examples:
                         help="Disable colored output")
     parser.add_argument("--no-build", action="store_true",
                         help="Skip building the kernel")
-    parser.add_argument("--test", "-T", choices=["boot", "memory", "command", "all"],
+    parser.add_argument("--test", "-T", choices=["boot", "memory", "command", "pe", "all"],
                         default="all", help="Run specific test (default: all)")
                         
     args = parser.parse_args()
@@ -262,11 +265,19 @@ Examples:
         success = runner.run_all_tests()
     else:
         # Run single test
-        if args.test == "boot":
-            result = runner.run_test("boot", BootTest)
+        test_map = {
+            "boot": BootTest,
+            "memory": MemoryTest,
+            "command": CommandTest,
+            "pe": QEMUPETest
+        }
+        test_class = test_map.get(args.test)
+        if test_class:
+            result = runner.run_test(args.test, test_class)
+            success = result.passed
         else:
-            result = runner.run_test("memory", MemoryTest)
-        success = result.passed
+            print(f"Unknown test: {args.test}")
+            success = False
         
     sys.exit(0 if success else 1)
 

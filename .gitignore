@@ -27,3 +27,9 @@ user/*.o
 user/*.elf
 user/*.sbf
 user/lib/*.o
+user/win_hello.exe
+win_test.exe
+win_hello.exe
+test_output.txt
+test_pe.exe
+qemu_output.txt

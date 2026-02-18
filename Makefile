@@ -17,7 +17,7 @@ QEMUFLAGS = -nographic -display curses -monitor none -device isa-debug-exit,ioba
 QEMUFLAGS_NOEXIT = -nographic -display curses -monitor none -d guest_errors -d int -no-reboot -D qemu_debug.log -drive format=raw,file=
 
 OBJDIR = ./obj
-OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o ./obj/interrupts_asm.o
+OBJLIST = ./obj/bootloader.o ./obj/Kernel.o ./obj/runtime.o ./obj/interrupts_asm.o ./obj/win_syscall_handler.o
 BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
@@ -29,7 +29,7 @@ qemu: BB.bin
 qemu-noexit: BB.bin
 	$(QEMUCMD) $(QEMUFLAGS_NOEXIT)$(BUILDDIR)/BB.bin
 
-$(OBJDIR)/Kernel.o: Kernel.java JavaToLLVM.java
+$(OBJDIR)/Kernel.o: kernel/*.java JavaToLLVM.java
 	./build_kernel_custom.sh
 
 $(OBJDIR)/runtime.o: runtime.c $(OBJDIR)
@@ -40,6 +40,9 @@ $(OBJDIR)/bootloader.o : bootloader.asm $(OBJDIR)
 
 $(OBJDIR)/interrupts_asm.o : interrupts.asm $(OBJDIR)
 	$(AS) interrupts.asm -o $(OBJDIR)/interrupts_asm.o
+
+$(OBJDIR)/win_syscall_handler.o : win_syscall_handler.asm $(OBJDIR)
+	$(AS) win_syscall_handler.asm -o $(OBJDIR)/win_syscall_handler.o
 
 $(BUILDDIR) :
 	test ! -d $(BUILDDIR) && mkdir $(BUILDDIR)
@@ -52,28 +55,32 @@ clean :
 	rm -rf $(OBJLIST)
 	rm -f $(BUILDDIR)/BB.bin
 	rm -f *.class
+	rm -f kernel/*.class
 
 # Run automated test harness
-test: BB.bin
+test: disk
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin
 
 # Run tests with verbose output
-test-verbose: BB.bin
+test-verbose: disk
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin -v
 
 # Run specific tests
-test-boot: BB.bin
+test-boot: disk
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test boot
 
-test-memory: BB.bin
+test-memory: disk
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test memory
 
-test-command: BB.bin
+test-command: disk
 	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test command
+
+test-pe: disk
+	python3 test/run_tests.py --kernel $(BUILDDIR)/BB.bin --test pe
 
 # Create disk image with user programs
 disk: BB.bin
-	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf
+	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf user/win_hello.exe
 	@echo "Created $(BUILDDIR)/disk.img"
 	# Embed filesystem into kernel disk image at 1MB offset
 	python3 embed_fs.py $(BUILDDIR)/BB.bin $(BUILDDIR)/disk.img

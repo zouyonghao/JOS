@@ -471,13 +471,23 @@ public class JavaToLLVM {
             paramSlot += llType.equals("i64") ? 2 : 1;
         }
 
-        // If this is startKernel, insert clinit call for this class
+        // If this is startKernel, insert clinit call for this class and other kernel classes
+        // IMPORTANT: These calls come AFTER allocas but BEFORE br label %bb_0
         if (m.name.equals("startKernel")) {
-            // Check if clinit exists in current class
-            for (MethodInfo mm : methods()) {
-                if (mm.name.equals("<clinit>") && mm.code != null) {
-                    emit("  call void @" + className() + "_clinit_V()");
-                    break;
+            // Insert clinit calls for all kernel classes that have them
+            // Order matters - ensure dependencies are initialized first
+            String[] kernelClasses = {"kernel_Native", "kernel_Console", "kernel_Memory", 
+                                      "kernel_Threading", "kernel_Filesystem", "kernel_Loader",
+                                      "kernel_Interrupts", "kernel_Shell", "kernel_Syscalls"};
+            for (String clsName : kernelClasses) {
+                ClassInfo clsInfo = classes.get(clsName);
+                if (clsInfo != null) {
+                    for (MethodInfo mm : clsInfo.methods) {
+                        if (mm.name.equals("<clinit>") && mm.code != null) {
+                            emit("  call void @" + clsName + "_clinit_V()");
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1226,11 +1236,17 @@ public class JavaToLLVM {
         String llType = localTypeToLLVM(localTypes[idx]);
         String r = nextSSA();
         emit("  " + r + " = load " + llType + ", " + llType + "* %local." + idx);
-        // If loading boolean (i1), zext to i32 for Java stack
+        // Handle type conversions for Java stack (i32)
         if (llType.equals("i1")) {
+            // Boolean: zext to i32
             String ext = nextSSA();
             emit("  " + ext + " = zext i1 " + r + " to i32");
             push(ext, 'i');
+        } else if (llType.equals("i64")) {
+            // Local typed as i64 but we need i32 - truncate
+            String trunc = nextSSA();
+            emit("  " + trunc + " = trunc i64 " + r + " to i32");
+            push(trunc, 'i');
         } else {
             push(r, 'i');
         }
@@ -1256,6 +1272,11 @@ public class JavaToLLVM {
             String cmp = nextSSA();
             emit("  " + cmp + " = icmp ne i32 " + val + ", 0");
             val = cmp;
+        } else if (llType.equals("i64")) {
+            // Local was inferred as i64 but we're storing i32 - convert to i64
+            String ext = nextSSA();
+            emit("  " + ext + " = sext i32 " + val + " to i64");
+            val = ext;
         }
         emit("  store " + llType + " " + val + ", " + llType + "* %local." + idx);
     }
@@ -1267,6 +1288,13 @@ public class JavaToLLVM {
 
     static void translateAstore(int idx) {
         String val = pop();
+        // Check if val needs to be cast from i64 to i8*
+        if (!val.startsWith("%") && !val.equals("null")) {
+            // It's likely an integer constant, need to inttoptr
+            String ptr = nextSSA();
+            emit("  " + ptr + " = inttoptr i64 " + val + " to i8*");
+            val = ptr;
+        }
         emit("  store i8* " + val + ", i8** %local." + idx);
     }
 
@@ -1541,8 +1569,9 @@ public class JavaToLLVM {
             emit(call.toString());
         }
 
-        // Register as extern if not in current class
-        if (!cls.equals(className())) {
+        // Register as extern if not in current class AND not in kernel package
+        // (kernel package classes are compiled together)
+        if (!cls.equals(className()) && !cls.startsWith("kernel_")) {
             registerExtern(retType, mangledName, params);
         }
     }
@@ -2060,6 +2089,9 @@ public class JavaToLLVM {
                         types[op - 0x3F] = 'l'; break;
                     case 0x4B: case 0x4C: case 0x4D: case 0x4E: // astore_0..3
                         types[op - 0x4B] = 'p'; break;
+                    case 0x84: // iinc - marks the local as int
+                        types[code[pc+1] & 0xFF] = 'i';
+                        break;
                 }
                 pc += opcodeLength(op, code, pc);
             }

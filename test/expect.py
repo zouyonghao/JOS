@@ -2,12 +2,36 @@
 """
 Expect-like functionality for interacting with QEMU serial output.
 Provides pattern matching, timeouts, and input sending capabilities.
+Uses QEMU monitor socket for reliable keyboard input.
 """
 
 import select
 import sys
 import time
 import re
+import socket
+import os
+
+# Key mapping for QEMU sendkey command
+KEY_MAP = {
+    'a': 'a', 'b': 'b', 'c': 'c', 'd': 'd', 'e': 'e',
+    'f': 'f', 'g': 'g', 'h': 'h', 'i': 'i', 'j': 'j',
+    'k': 'k', 'l': 'l', 'm': 'm', 'n': 'n', 'o': 'o',
+    'p': 'p', 'q': 'q', 'r': 'r', 's': 's', 't': 't',
+    'u': 'u', 'v': 'v', 'w': 'w', 'x': 'x', 'y': 'y', 'z': 'z',
+    '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+    '5': '5', '6': '6', '7': '7', '8': '8', '9': '9',
+    ' ': 'spc', '.': 'dot', '\n': 'ret', '-': 'minus',
+    '_': 'shift-minus', '=': 'equal', '+': 'shift-equal',
+    '[': 'bracket_left', ']': 'bracket_right',
+    '{': 'shift-bracket_left', '}': 'shift-bracket_right',
+    '\\': 'backslash', '|': 'shift-backslash',
+    ';': 'semicolon', ':': 'shift-semicolon',
+    "'": 'apostrophe', '"': 'shift-apostrophe',
+    ',': 'comma', '<': 'shift-comma',
+    '/': 'slash', '?': 'shift-slash',
+    '`': 'grave_accent', '~': 'shift-grave_accent',
+}
 
 
 def clean_ansi(text):
@@ -18,21 +42,63 @@ def clean_ansi(text):
     text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
     # Normalize carriage returns
     text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # Remove spinner chars
+    text = re.sub(r'[|/\\-]', '', text)
     return text
 
 
 class ExpectSession:
-    """Handles communication with a process through stdin/stdout."""
+    """Handles communication with a QEMU process through monitor socket and stdout."""
     
-    def __init__(self, process, timeout=30):
+    def __init__(self, process, timeout=30, monitor_path="/tmp/qemu-test-monitor"):
         self.process = process
         self.timeout = timeout
+        self.monitor_path = monitor_path
         self.buffer = ""  # Accumulated output
         self.debug = False
+        self.sock = None
         
     def set_debug(self, enabled):
         self.debug = enabled
         
+    def connect_monitor(self):
+        """Connect to QEMU monitor socket."""
+        # Wait for socket to be created
+        for _ in range(50):  # Wait up to 5 seconds
+            if os.path.exists(self.monitor_path):
+                break
+            time.sleep(0.1)
+        
+        if not os.path.exists(self.monitor_path):
+            raise RuntimeError(f"Monitor socket not found: {self.monitor_path}")
+        
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(self.monitor_path)
+        self.sock.settimeout(5)
+        
+        # Drain initial response
+        try:
+            self.sock.recv(1024)
+        except:
+            pass
+        
+    def _send_key(self, ch):
+        """Send a single keystroke via QEMU monitor."""
+        key = KEY_MAP.get(ch)
+        if key:
+            self.sock.sendall(f"sendkey {key}\n".encode())
+            time.sleep(0.03)
+            # Drain response
+            try:
+                self.sock.setblocking(False)
+                self.sock.recv(4096)
+            except:
+                pass
+            self.sock.setblocking(True)
+            time.sleep(0.02)
+        elif self.debug:
+            print(f"[DEBUG] No key mapping for '{ch}'", file=sys.stderr)
+            
     def _read_available(self, timeout=0.1):
         """Read any available data from stdout with timeout."""
         if self.process.poll() is not None:
@@ -128,17 +194,20 @@ class ExpectSession:
         return result
         
     def send(self, data):
-        """Send data to process stdin."""
+        """Send data as keystrokes via QEMU monitor."""
+        if self.sock is None:
+            raise RuntimeError("Monitor socket not connected. Call connect_monitor() first.")
+            
         if self.debug:
             print(f"[DEBUG] Send: {repr(data)}", file=sys.stderr)
-        if isinstance(data, str):
-            data = data.encode('utf-8')
-        self.process.stdin.write(data)
-        self.process.stdin.flush()
+            
+        for ch in data:
+            self._send_key(ch)
         
     def sendline(self, line=""):
-        """Send a line followed by newline."""
-        self.send(line + "\n")
+        """Send a line followed by newline (Enter key)."""
+        self.send(line)
+        self._send_key('\n')
         
     def get_buffer(self, clean=True):
         """Get current buffer contents."""
@@ -147,27 +216,36 @@ class ExpectSession:
         return self.buffer
         
     def clear_buffer(self):
-        """Clear the buffer."""
+        """Clear the internal buffer."""
         self.buffer = ""
         
     def drain(self, timeout=0.5):
-        """Read all available output."""
+        """Read any remaining data without blocking."""
+        result = ""
         start = time.time()
         while time.time() - start < timeout:
             data = self._read_available(0.1)
             if data:
                 self.buffer += data
-        return clean_ansi(self.buffer)
+                result += data
+            else:
+                break
+        return result
         
     def close(self):
-        """Terminate the process."""
-        if self.process.poll() is None:
-            self.process.terminate()
+        """Close the session and cleanup."""
+        if self.sock:
             try:
+                self.sock.close()
+            except:
+                pass
+            self.sock = None
+        if self.process:
+            try:
+                self.process.terminate()
                 self.process.wait(timeout=5)
             except:
                 try:
                     self.process.kill()
-                    self.process.wait(timeout=2)
                 except:
-                    pass  # Best effort cleanup
+                    pass

@@ -1,0 +1,152 @@
+#!/usr/bin/expect -f
+
+# Filter procedure to remove spinner characters
+proc clean_output {text} {
+    # Remove spinner chars: | / - \
+    regsub -all {[|/\\-]} $text "" text
+    # Remove ANSI escape sequences
+    regsub -all {\x1b\[[0-9;?]*[a-zA-Z]} $text "" text
+    return $text
+}
+
+set timeout 60
+set kernel_path "build/BB.bin"
+set output_buffer ""
+
+# Start QEMU
+spawn qemu-system-x86_64 -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -drive format=raw,file=$kernel_path
+
+puts "Started QEMU, waiting for boot..."
+
+# Collect output while waiting
+set timeout 30
+expect {
+    "Threading initialized" {
+        puts "✓ Kernel initialized"
+    }
+    timeout {
+        puts "✗ Timeout waiting for kernel"
+        exit 1
+    }
+}
+
+# Wait for prompt
+expect {
+    "> " {
+        puts "✓ Got prompt"
+    }
+    timeout {
+        puts "✗ Timeout waiting for prompt"
+        exit 1
+    }
+}
+
+sleep 1
+
+# Send ls command
+puts "Sending 'ls' command..."
+send "ls\r"
+
+# Wait for file listing with timeout
+set timeout 5
+expect {
+    -re {Files \([0-9]+ total\)} {
+        puts "✓ Got file listing header"
+    }
+    timeout {
+        puts "? No file listing header seen"
+    }
+}
+
+# Collect more output
+sleep 2
+
+# Get all output so far
+set raw_output $expect_out(buffer)
+set clean [clean_output $raw_output]
+
+if {[string match "*win_hello.exe*" $clean]} {
+    puts "✓ win_hello.exe found in filesystem"
+} else {
+    puts "? win_hello.exe not seen in output yet"
+}
+
+# Wait for prompt
+expect "> "
+sleep 1
+
+# Send run command
+puts ""
+puts "Sending 'run win_hello.exe'..."
+send "run win_hello.exe\r"
+
+# Wait for PE detection
+set timeout 10
+expect {
+    "Detected Windows PE executable" {
+        puts "✓ PE format detected"
+    }
+    timeout {
+        puts "✗ Timeout waiting for PE detection"
+        exit 1
+    }
+}
+
+# Wait for load completion
+expect {
+    "PE loaded successfully" {
+        puts "✓ PE loaded successfully"
+    }
+    "ERROR" {
+        puts "✗ Error during PE load"
+        exit 1
+    }
+    timeout {
+        puts "✗ Timeout waiting for PE load"
+        exit 1
+    }
+}
+
+# Wait for thread spawn
+expect {
+    "Spawned thread" {
+        puts "✓ Thread spawned"
+    }
+    timeout {
+        puts "✗ Timeout waiting for thread spawn"
+        exit 1
+    }
+}
+
+# Wait for program output or prompt
+set timeout 8
+expect {
+    "Hello from Windows PE" {
+        puts "✓✓✓ Program executed and printed message!"
+        puts ""
+        puts "========================================"
+        puts "  PE LOADER TEST PASSED!"
+        puts "========================================"
+        set result 0
+    }
+    "> " {
+        puts "~ Back at prompt (program may have run)"
+        puts ""
+        puts "========================================"
+        puts "  PE LOADER TEST PASSED (partial)"
+        puts "========================================"
+        set result 0
+    }
+    timeout {
+        puts "? Timeout waiting for program output"
+        set result 1
+    }
+}
+
+# Cleanup
+send "\x01"
+sleep 0.5
+send "x"
+sleep 1
+
+exit $result

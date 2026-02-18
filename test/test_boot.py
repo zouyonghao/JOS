@@ -31,25 +31,42 @@ class BootTest:
         self.session = None
         self.process = None
         
+    def _cleanup_monitor(self):
+        """Remove old monitor socket."""
+        import os
+        try:
+            os.unlink("/tmp/qemu-test-monitor")
+        except FileNotFoundError:
+            pass
+        
     def _start_qemu(self):
         """Start QEMU with the kernel."""
-        # Note: -nographic implies -serial stdio, so we don't need both
+        self._cleanup_monitor()
+        
         cmd = [
             "qemu-system-x86_64",
             "-nographic",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
             "-no-reboot",
-            "-drive", f"format=raw,file={self.kernel_path}"
+            "-drive", f"format=raw,file={self.kernel_path}",
+            "-monitor", "unix:/tmp/qemu-test-monitor,server,nowait"
         ]
         
         self.process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            bufsize=0
         )
         
         self.session = ExpectSession(self.process, timeout=self.timeout)
+        # Boot test doesn't need monitor, but connect for consistency
+        time.sleep(4)
+        try:
+            self.session.connect_monitor()
+        except:
+            pass  # Boot test works without monitor
         
     def run(self):
         """
@@ -65,10 +82,10 @@ class BootTest:
             
             # Wait for kernel boot message
             try:
-                idx, matched = self.session.expect("JavaOS Kernel", timeout=10)
+                idx, matched = self.session.expect("JOS Kernel", timeout=10)
                 output_lines.append(f"Found: {matched}")
             except TimeoutError:
-                return (False, "Timeout waiting for 'JavaOS Kernel' boot message", 
+                return (False, "Timeout waiting for 'JOS Kernel' boot message", 
                         self.session.get_buffer())
                         
             # Wait for prompt

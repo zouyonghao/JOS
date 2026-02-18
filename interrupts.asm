@@ -110,13 +110,13 @@ common_isr_handler:
     cmpq $0x80, 120(%rsp)
     jne .not_syscall_save
     movq 112(%rsp), %rax
-    movq %rax, Kernel_syscallNum(%rip)        # RAX = syscall number
+    movq %rax, kernel_Syscalls_syscallNum(%rip)        # RAX = syscall number
     movq 64(%rsp), %rax
-    movq %rax, Kernel_syscallArg1(%rip)       # RDI = arg1
+    movq %rax, kernel_Syscalls_syscallArg1(%rip)       # RDI = arg1
     movq 72(%rsp), %rax
-    movq %rax, Kernel_syscallArg2(%rip)       # RSI = arg2
+    movq %rax, kernel_Syscalls_syscallArg2(%rip)       # RSI = arg2
     movq 96(%rsp), %rax
-    movq %rax, Kernel_syscallArg3(%rip)       # RDX = arg3
+    movq %rax, kernel_Syscalls_syscallArg3(%rip)       # RDX = arg3
 .not_syscall_save:
 
     movq 120(%rsp), %rdi
@@ -125,18 +125,18 @@ common_isr_handler:
     # For syscalls, write return value back to saved RAX
     cmpq $0x80, 120(%rsp)
     jne .not_syscall_ret
-    movq Kernel_syscallRet(%rip), %rax
+    movq kernel_Syscalls_syscallRet(%rip), %rax
     movq %rax, 112(%rsp)
 .not_syscall_ret:
 
     # === Context switch check ===
     # Java scheduler sets ctxLoadRSP to switch threads
-    movq Kernel_ctxLoadRSP(%rip), %rax
+    movq kernel_Threading_ctxLoadRSP(%rip), %rax
     testq %rax, %rax
     jz .no_context_switch
 
     # Optionally save current RSP to thread's slot
-    movq Kernel_ctxSaveRSPAddr(%rip), %rbx
+    movq kernel_Threading_ctxSaveRSPAddr(%rip), %rbx
     testq %rbx, %rbx
     jz .skip_save
     movq %rsp, (%rbx)
@@ -144,10 +144,13 @@ common_isr_handler:
     # Load new thread's RSP
     movq %rax, %rsp
     # Clear switch flags
-    movq $0, Kernel_ctxLoadRSP(%rip)
-    movq $0, Kernel_ctxSaveRSPAddr(%rip)
+    movq $0, kernel_Threading_ctxLoadRSP(%rip)
+    movq $0, kernel_Threading_ctxSaveRSPAddr(%rip)
+    # After context switch, restore registers from NEW stack and return
+    jmp .restore_and_return
 .no_context_switch:
 
+.restore_and_return:
     # Restore all general purpose registers
     popq %r15
     popq %r14

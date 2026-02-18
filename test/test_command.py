@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from expect import ExpectSession
 import subprocess
+import time
 
 
 class CommandTest:
@@ -34,24 +35,39 @@ class CommandTest:
         self.session = None
         self.process = None
         
+    def _cleanup_monitor(self):
+        """Remove old monitor socket."""
+        import os
+        try:
+            os.unlink("/tmp/qemu-test-monitor")
+        except FileNotFoundError:
+            pass
+        
     def _start_qemu(self):
         """Start QEMU with the kernel."""
+        self._cleanup_monitor()
+        
         cmd = [
             "qemu-system-x86_64",
             "-nographic",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
             "-no-reboot",
-            "-drive", f"format=raw,file={self.kernel_path}"
+            "-drive", f"format=raw,file={self.kernel_path}",
+            "-monitor", "unix:/tmp/qemu-test-monitor,server,nowait"
         ]
         
         self.process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            bufsize=0
         )
         
         self.session = ExpectSession(self.process, timeout=self.timeout)
+        # Wait for QEMU to start and create monitor socket
+        time.sleep(4)
+        self.session.connect_monitor()
         
     def run(self):
         """
@@ -67,7 +83,7 @@ class CommandTest:
             
             # Wait for kernel boot
             try:
-                idx, matched = self.session.expect("JavaOS Kernel", timeout=15)
+                idx, matched = self.session.expect("JOS Kernel", timeout=15)
                 output_lines.append(f"Boot: {matched}")
             except TimeoutError:
                 return (False, "Timeout waiting for kernel boot",
