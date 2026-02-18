@@ -39,6 +39,9 @@ public class Core {
         // Initialize interrupts (PIC, IDT, PIT)
         Interrupts.initInterrupts();
         
+        // Initialize syscall MSRs for Windows-compatible binaries
+        Native.initSyscallMSR();
+        
         Console.writeString("\nKernel initialization complete.\n");
         Console.writeString("Type 'help' for available commands.\n\n");
         

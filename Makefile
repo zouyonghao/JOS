@@ -80,7 +80,7 @@ test-pe: disk
 
 # Create disk image with user programs
 disk: BB.bin
-	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf user/win_hello.exe
+	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf user/win_dual_hello.exe
 	@echo "Created $(BUILDDIR)/disk.img"
 	# Embed filesystem into kernel disk image at 1MB offset
 	python3 embed_fs.py $(BUILDDIR)/BB.bin $(BUILDDIR)/disk.img

@@ -34,6 +34,22 @@ public class Loader {
     private static final int OPT_SIZEOFIMAGE_OFFSET = 56;
     private static final int OPT_SIZEOFHEADERS_OFFSET = 60;
     
+    // PE32+ Data Directory offsets (from optional header start)
+    private static final int OPT_EXPORT_TABLE_RVA = 112;
+    private static final int OPT_IMPORT_TABLE_RVA = 120;
+    private static final int OPT_IMPORT_TABLE_SIZE = 124;
+    
+    // Import Directory Entry structure offsets
+    private static final int IMPORT_DESCRIPTOR_SIZE = 20;
+    private static final int IMPORT_ORIGINAL_FIRST_THUNK = 0;   // RVA
+    private static final int IMPORT_TIME_DATE_STAMP = 4;
+    private static final int IMPORT_FORWARDER_CHAIN = 8;
+    private static final int IMPORT_NAME_RVA = 12;              // RVA to DLL name
+    private static final int IMPORT_FIRST_THUNK = 16;           // RVA to IAT
+    
+    // Import Lookup Table (Thunk) entry format
+    // For PE32+: bit 63 = ordinal flag, bits 0-15 = ordinal, bits 0-30 = hint/name table entry
+    
     private static final int SECTION_HEADER_SIZE = 40;
     private static final int IMAGE_REL_BASED_DIR64 = 10;
     private static final int IMAGE_REL_BASED_HIGHLOW = 3;
@@ -55,6 +71,16 @@ public class Loader {
     
     // Loaded PE base address
     private static long peLoadedBase = 0;
+    
+    // Emulated kernel32.dll function table
+    // Each entry is a code stub address that calls into our handler
+    private static final int MAX_EMULATED_FUNCS = 16;
+    private static long emulatedFuncAddrs = 0;  // Allocated memory for stubs
+    
+    // kernel32.dll function IDs
+    private static final int FUNC_GET_STD_HANDLE = 1;
+    private static final int FUNC_WRITE_FILE = 2;
+    private static final int FUNC_EXIT_PROCESS = 3;
 
     public static void initWinHandles() {
         int i = 0;
@@ -232,10 +258,16 @@ public class Loader {
         while (s < numSections) {
             int secOffset = sectionTableOffset + s * SECTION_HEADER_SIZE;
             
+            // Section header layout:
+            // 0-7: Name (8 bytes)
+            // 8: VirtualSize (4 bytes)
+            // 12: VirtualAddress (4 bytes) 
+            // 16: SizeOfRawData (4 bytes)
+            // 20: PointerToRawData (4 bytes)
+            int virtSize = readUInt32LE(buffer, secOffset + 8);
             int virtAddr = readUInt32LE(buffer, secOffset + 12);
-            int virtSize = readUInt32LE(buffer, secOffset + 16);
+            int rawSize = readUInt32LE(buffer, secOffset + 16);
             int rawAddr = readUInt32LE(buffer, secOffset + 20);
-            int rawSize = readUInt32LE(buffer, secOffset + 24);
             
             int copySize = virtSize;
             if (rawSize < copySize) copySize = rawSize;
@@ -248,6 +280,19 @@ public class Loader {
             }
             
             s = s + 1;
+        }
+        
+        // Process import table
+        int importTableRVA = readUInt32LE(buffer, optHeaderOffset + OPT_IMPORT_TABLE_RVA);
+        if (importTableRVA != 0) {
+            processImportTable(execMem, importTableRVA);
+        }
+        
+        // Process relocations (base relocation table)
+        // This is needed for ASLR-aware binaries
+        int relocDirRVA = readUInt32LE(buffer, optHeaderOffset + 144);  // Base Relocation Table RVA
+        if (relocDirRVA != 0) {
+            processRelocations(execMem, relocDirRVA, imageBase);
         }
         
         long entryPoint = execMem + entryPointRVA;
@@ -359,6 +404,239 @@ public class Loader {
     private static long winNtTerminateProcess(long processHandle, long exitStatus) {
         Threading.terminateCurrentThread();
         return STATUS_SUCCESS;
+    }
+    
+    // ===================================================================
+    // IMPORT TABLE PROCESSING
+    // ===================================================================
+    
+    private static void processImportTable(long execMem, int importTableRVA) {
+        int descOffset = importTableRVA;
+        int dllCount = 0;
+        
+        // Iterate through import descriptors
+        while (true) {
+            int originalFirstThunk = readUInt32LE(execMem, descOffset + IMPORT_ORIGINAL_FIRST_THUNK);
+            int nameRVA = readUInt32LE(execMem, descOffset + IMPORT_NAME_RVA);
+            int firstThunk = readUInt32LE(execMem, descOffset + IMPORT_FIRST_THUNK);
+            
+            // Null descriptor marks end
+            if (nameRVA == 0 && firstThunk == 0) {
+                break;
+            }
+            
+            // Read DLL name and check if it's kernel32.dll
+            int isKernel32 = checkDllName(execMem, nameRVA);
+            
+            // Process thunks for this DLL
+            int thunkOffset = firstThunk;
+            int ordinalOrHintRVA = originalFirstThunk;
+            if (ordinalOrHintRVA == 0) {
+                ordinalOrHintRVA = firstThunk;  // Use FirstThunk if OFT is 0
+            }
+            
+            int funcIdx = 0;
+            while (true) {
+                long thunkData = readUInt64LE(execMem, ordinalOrHintRVA + funcIdx * 8);
+                if (thunkData == 0) {
+                    break;  // End of thunks
+                }
+                
+                // Check if import by ordinal (bit 63 set)
+                if ((thunkData & 0x8000000000000000L) != 0) {
+                    int ordinal = (int)(thunkData & 0xFFFF);
+                    Console.writeString("      Ordinal: ");
+                    Console.writeNumber(ordinal);
+                    Console.writeString("\n");
+                } else {
+                    // Import by name: thunkData is RVA to hint/name table entry
+                    int hintNameRVA = (int)thunkData;
+                    
+                    // Resolve function
+                    long funcAddr = resolveImportByHintName(execMem, hintNameRVA, isKernel32);
+                    
+                    // Write to IAT
+                    Native.writeMemoryLong(execMem + thunkOffset + funcIdx * 8, funcAddr);
+                }
+                
+                funcIdx = funcIdx + 1;
+            }
+            
+            descOffset = descOffset + IMPORT_DESCRIPTOR_SIZE;
+            dllCount = dllCount + 1;
+        }
+    }
+    
+    // Check if DLL name is kernel32.dll (case-insensitive)
+    // Returns 1 if kernel32.dll, 0 otherwise
+    private static int checkDllName(long execMem, int nameRVA) {
+        // Check for "KERNEL32.DLL" or "kernel32.dll"
+        // K=0x4B, E=0x45, R=0x52, N=0x4E, E=0x45, L=0x4C, 3=0x33, 2=0x32
+        char c0 = (char)(Native.readMemoryLong(execMem + nameRVA) & 0xFF);
+        char c1 = (char)(Native.readMemoryLong(execMem + nameRVA + 1) & 0xFF);
+        char c2 = (char)(Native.readMemoryLong(execMem + nameRVA + 2) & 0xFF);
+        char c3 = (char)(Native.readMemoryLong(execMem + nameRVA + 3) & 0xFF);
+        char c4 = (char)(Native.readMemoryLong(execMem + nameRVA + 4) & 0xFF);
+        char c5 = (char)(Native.readMemoryLong(execMem + nameRVA + 5) & 0xFF);
+        char c6 = (char)(Native.readMemoryLong(execMem + nameRVA + 6) & 0xFF);
+        char c7 = (char)(Native.readMemoryLong(execMem + nameRVA + 7) & 0xFF);
+        
+        // Check "kernel32" (case-insensitive)
+        if (charEqualsIgnoreCase(c0, 'K') == 0) return 0;
+        if (charEqualsIgnoreCase(c1, 'E') == 0) return 0;
+        if (charEqualsIgnoreCase(c2, 'R') == 0) return 0;
+        if (charEqualsIgnoreCase(c3, 'N') == 0) return 0;
+        if (charEqualsIgnoreCase(c4, 'E') == 0) return 0;
+        if (charEqualsIgnoreCase(c5, 'L') == 0) return 0;
+        if (charEqualsIgnoreCase(c6, '3') == 0) return 0;
+        if (charEqualsIgnoreCase(c7, '2') == 0) return 0;
+        
+        return 1;
+    }
+    
+    // Case-insensitive character comparison
+    // Returns 1 if equal, 0 otherwise
+    private static int charEqualsIgnoreCase(char c, char expected) {
+        if (c == expected) return 1;
+        // Convert to lowercase
+        char lower = c;
+        if (c >= 'A' && c <= 'Z') {
+            lower = (char)(c + 32);
+        }
+        char expectedLower = expected;
+        if (expected >= 'A' && expected <= 'Z') {
+            expectedLower = (char)(expected + 32);
+        }
+        if (lower == expectedLower) return 1;
+        return 0;
+    }
+    
+    // Resolve import by reading function name from hint/name table
+    private static long resolveImportByHintName(long execMem, int hintNameRVA, int isKernel32) {
+        // hint/name table: 2-byte hint, followed by null-terminated function name
+        int hint = readUInt16LE(execMem, hintNameRVA);
+        int nameOffset = hintNameRVA + 2;
+        
+        // Read function name and resolve
+        if (isKernel32 != 0) {
+            return resolveKernel32Func(execMem, nameOffset);
+        }
+        
+        // Unknown DLL - return dummy
+        Console.writeString("      Unknown DLL function (hint ");
+        Console.writeNumber(hint);
+        Console.writeString(")\n");
+        return 0xDEADBEEF;
+    }
+    
+    // Resolve kernel32.dll function by name
+    private static long resolveKernel32Func(long execMem, int nameOffset) {
+        // Read function name character by character and match
+        char c0 = (char)(Native.readMemoryLong(execMem + nameOffset) & 0xFF);
+        char c1 = (char)(Native.readMemoryLong(execMem + nameOffset + 1) & 0xFF);
+        char c2 = (char)(Native.readMemoryLong(execMem + nameOffset + 2) & 0xFF);
+        char c3 = (char)(Native.readMemoryLong(execMem + nameOffset + 3) & 0xFF);
+        
+        // Check for "GetStdHandle" (starts with "GetS")
+        if (c0 == 'G' && c1 == 'e' && c2 == 't' && c3 == 'S') {
+            return createEmulatedFunc(FUNC_GET_STD_HANDLE);
+        }
+        
+        // Check for "WriteFile" (starts with "Writ")
+        if (c0 == 'W' && c1 == 'r' && c2 == 'i' && c3 == 't') {
+            return createEmulatedFunc(FUNC_WRITE_FILE);
+        }
+        
+        // Check for "ExitProcess" (starts with "Exit")
+        if (c0 == 'E' && c1 == 'x' && c2 == 'i' && c3 == 't') {
+            return createEmulatedFunc(FUNC_EXIT_PROCESS);
+        }
+        
+        return 0xDEADBEEF;
+    }
+    
+    // Process base relocations
+    private static void processRelocations(long execMem, int relocDirRVA, long imageBase) {
+        // For now, we load at the preferred base, so no relocations needed
+        // If we needed to relocate, we'd process the relocation blocks here
+    }
+    
+    // Create or get emulated function stub
+    private static long createEmulatedFunc(int funcId) {
+        // Allocate memory for stubs if not done
+        if (emulatedFuncAddrs == 0) {
+            emulatedFuncAddrs = Memory.heapAlloc(64 * MAX_EMULATED_FUNCS);
+        }
+        
+        // Each stub is 64 bytes max
+        long stubAddr = emulatedFuncAddrs + (funcId - 1) * 64;
+        
+        // Create a simple stub that calls our handler via int 0x80
+        // The stub will:
+        //   mov rax, funcId
+        //   int 0x80
+        //   ret
+        // For now, we use a special syscall number to dispatch to kernel32 handlers
+        
+        // mov rax, imm64 (0x48 0xB8)
+        Native.writeMemory(stubAddr + 0, (char)0x48);
+        Native.writeMemory(stubAddr + 1, (char)0xB8);
+        // Function ID in RAX
+        Native.writeMemoryLong(stubAddr + 2, (long)funcId);
+        // int 0x80 (0xCD 0x80)
+        Native.writeMemory(stubAddr + 10, (char)0xCD);
+        Native.writeMemory(stubAddr + 11, (char)0x80);
+        // ret (0xC3)
+        Native.writeMemory(stubAddr + 12, (char)0xC3);
+        
+        return stubAddr;
+    }
+    
+    // Handle kernel32.dll function calls from user code
+    public static long handleKernel32Call(int funcId, long arg1, long arg2, long arg3, long arg4) {
+        if (funcId == FUNC_GET_STD_HANDLE) {
+            return kernel32_GetStdHandle((int)arg1);
+        } else if (funcId == FUNC_WRITE_FILE) {
+            return kernel32_WriteFile(arg1, arg2, arg3, arg4, 0);
+        } else if (funcId == FUNC_EXIT_PROCESS) {
+            kernel32_ExitProcess((int)arg1);
+            return 0;  // Never reached
+        }
+        return 0;
+    }
+    
+    // kernel32.dll: GetStdHandle
+    private static long kernel32_GetStdHandle(int nStdHandle) {
+        // nStdHandle: -11 = STD_OUTPUT_HANDLE, -12 = STD_INPUT_HANDLE, -13 = STD_ERROR_HANDLE
+        if (nStdHandle == -11 || nStdHandle == 0xFFFFFFF5) {
+            return WIN_HANDLE_STDOUT;  // Return our stdout handle
+        }
+        return 0xFFFFFFFFFFFFFFFFL;  // INVALID_HANDLE_VALUE
+    }
+    
+    // kernel32.dll: WriteFile
+    private static long kernel32_WriteFile(long hFile, long lpBuffer, long nNumberOfBytesToWrite, long lpNumberOfBytesWritten, long lpOverlapped) {
+        if (hFile == WIN_HANDLE_STDOUT) {
+            int i = 0;
+            while (i < nNumberOfBytesToWrite) {
+                char c = (char)(Native.readMemoryLong(lpBuffer + i) & 0xFF);
+                Console.writeChar(c);
+                i = i + 1;
+            }
+            if (lpNumberOfBytesWritten != 0) {
+                Native.writeMemoryLong(lpNumberOfBytesWritten, nNumberOfBytesToWrite);
+            }
+            return 1;  // TRUE
+        }
+        return 0;  // FALSE
+    }
+    
+    // kernel32.dll: ExitProcess
+    private static void kernel32_ExitProcess(int uExitCode) {
+        Console.writeString("Process exiting with code ");
+        Console.writeNumber(uExitCode);
+        Console.writeString("\n");
+        Threading.terminateCurrentThread();
     }
     
     public static long getPeLoadedBase() { return peLoadedBase; }

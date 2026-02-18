@@ -48,6 +48,9 @@ public class Native {
     // Program execution
     public static native void callProgram(long entryPoint);
     
+    // Windows syscall MSR initialization
+    public static native void initSyscallMSR();
+    
     // I/O delay
     public static void ioWait() {
         outb(0x80, (char)0);

@@ -33,3 +33,9 @@ win_hello.exe
 test_output.txt
 test_pe.exe
 qemu_output.txt
+user/win_hello.obj
+user/pe_jos_lib.obj
+user/win_hello_pure.exe
+user/win_hello_pure.obj
+user/*.obj
+user/*.exe

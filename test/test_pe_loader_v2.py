@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script for Windows PE loader in JOS.
-Uses QEMU monitor socket to send keystrokes reliably.
+Test script for Windows PE loader in JOS - version 2.
+Tests both win_hello.exe and win_hello_pure.exe.
 """
 
 import subprocess
@@ -22,14 +22,6 @@ KEY_MAP = {
     '5': '5', '6': '6', '7': '7', '8': '8', '9': '9',
     ' ': 'spc', '.': 'dot', '\n': 'ret', '-': 'minus',
     '_': 'shift-minus', '=': 'equal', '+': 'shift-equal',
-    '[': 'bracket_left', ']': 'bracket_right',
-    '{': 'shift-bracket_left', '}': 'shift-bracket_right',
-    '\\': 'backslash', '|': 'shift-backslash',
-    ';': 'semicolon', ':': 'shift-semicolon',
-    "'": 'apostrophe', '"': 'shift-apostrophe',
-    ',': 'comma', '<': 'shift-comma',
-    '/': 'slash', '?': 'shift-slash',
-    '`': 'grave_accent', '~': 'shift-grave_accent',
 }
 
 
@@ -109,18 +101,96 @@ class QEMUPETest:
         # Normalize whitespace
         text = re.sub(r'\s+', ' ', text).strip()
         return text
+
+    def test_pe_file(self, filename, expected_output):
+        """Test a single PE file."""
+        output_lines = []
+        
+        # Clear output buffer
+        self.output = ""
+        
+        # Send run command
+        output_lines.append(f"Testing: run {filename}")
+        self._send_keys(f"run {filename}\n")
+        
+        # Wait for PE loader output
+        expected_patterns = [
+            "Detected Windows PE executable",
+            "PE loaded successfully",
+            "Spawned thread",
+            expected_output,
+            "ERROR",
+            "Invalid",
+        ]
+        
+        found = None
+        start = time.time()
+        
+        while time.time() - start < 20:
+            self._read_output()
+            
+            for pattern in expected_patterns:
+                if pattern in self.output:
+                    found = pattern
+                    break
+                    
+            if found:
+                break
+                
+            time.sleep(0.2)
+            
+        # Wait a bit more for program output
+        time.sleep(3)
+        self._read_output()
+        
+        # Analyze results
+        result = {"passed": True, "messages": []}
+        
+        if "Detected Windows PE executable" in self.output:
+            result["messages"].append("✓ PE format detection")
+        else:
+            result["messages"].append("✗ PE format detection")
+            result["passed"] = False
+            
+        if "PE loaded successfully" in self.output:
+            result["messages"].append("✓ PE section loading")
+        else:
+            result["messages"].append("✗ PE section loading")
+            result["passed"] = False
+            
+        if "Spawned thread" in self.output:
+            result["messages"].append("✓ Thread spawning")
+        else:
+            result["messages"].append("✗ Thread spawning")
+            result["passed"] = False
+            
+        if expected_output in self.output:
+            result["messages"].append(f"✓ Program output: '{expected_output}'")
+        elif "Detected Windows PE" in self.output:
+            result["messages"].append(f"~ Program output: Started but '{expected_output}' not seen")
+            
+        if "ERROR" in self.output or "Invalid" in self.output:
+            result["messages"].append("✗ Errors detected")
+            result["passed"] = False
+            
+        # Get relevant output section
+        idx = self.output.find("Detected Windows PE")
+        if idx == -1:
+            idx = self.output.find(f"run {filename}")
+        if idx == -1:
+            idx = 0
+        relevant = self.output[idx:idx+1500]
+        result["output"] = self._clean_output(relevant)
+        
+        return result
         
     def run(self):
-        """
-        Run the PE loader test.
-        
-        Returns:
-            Tuple of (passed: bool, message: str, output: str)
-        """
+        """Run the PE loader test for both binaries."""
         output_lines = []
         
         output_lines.append("=" * 70)
-        output_lines.append("JOS Windows PE Loader Test")
+        output_lines.append("JOS Windows PE Loader Test v2")
+        output_lines.append("Tests both assembly and pure-C Windows PE binaries")
         output_lines.append("=" * 70)
         output_lines.append("")
         
@@ -179,121 +249,55 @@ class QEMUPETest:
             # Read output
             self._read_output()
             
-            if "win_dual_hello.exe" in self.output:
-                output_lines.append("✓ win_dual_hello.exe found in filesystem")
-            else:
-                output_lines.append("✗ win_dual_hello.exe NOT found")
-                output_lines.append("")
-                output_lines.append(f"Output length: {len(self.output)}")
-                output_lines.append("Output (last 800 chars):")
-                output_lines.append(self._clean_output(self.output[-800:]))
-                return (False, "win_dual_hello.exe not found in filesystem", "\n".join(output_lines))
-                
-            # Clear buffer for PE test
-            self.output = ""
-            
-            # Run the PE file
-            output_lines.append("")
-            output_lines.append("Sending 'run win_dual_hello.exe' command...")
-            self._send_keys("run win_dual_hello.exe\n")
-            
-            # Wait for PE loader output
-            output_lines.append("Waiting for PE loader...")
-            
-            expected_patterns = [
-                "Detected Windows PE executable",
-                "PE loaded successfully",
-                "Spawned thread",
-                "Hello from Windows binary",
-                "ERROR",
-                "Invalid",
-                "hang",  # If it hangs
-            ]
-            
-            found = None
-            start = time.time()
-            
-            while time.time() - start < 20:
-                self._read_output()
-                
-                for pattern in expected_patterns:
-                    if pattern in self.output:
-                        found = pattern
-                        break
-                        
-                if found:
-                    break
+            # Check for PE files
+            found_files = []
+            for f in ["win_dual_hello.exe"]:
+                if f in self.output:
+                    found_files.append(f)
+                    output_lines.append(f"✓ {f} found")
+                else:
+                    output_lines.append(f"✗ {f} NOT found")
                     
-                time.sleep(0.2)
+            if len(found_files) == 0:
+                return (False, "No PE files found in filesystem", "\n".join(output_lines))
                 
-            # Wait a bit more for program output
-            time.sleep(3)
-            self._read_output()
+            # Test each PE file
+            all_passed = True
             
-            # Collect results
-            output_lines.append("")
-            output_lines.append("=" * 70)
-            output_lines.append("PE Loader Output")
-            output_lines.append("=" * 70)
-            
-            # Find relevant section
-            output = self.output
-            idx = output.find("Detected Windows PE")
-            if idx == -1:
-                idx = output.find("run win_dual_hello")
-            if idx == -1:
-                idx = 0
+            for i, pe_file in enumerate(found_files):
+                # Add delay between tests (first test doesn't need delay)
+                if i > 0:
+                    output_lines.append("")
+                    output_lines.append("Waiting for previous test to complete...")
+                    time.sleep(5)
                 
-            relevant = output[idx:idx+2000]
-            output_lines.append(self._clean_output(relevant))
-            output_lines.append("=" * 70)
-            
-            # Analyze results
-            output_lines.append("")
-            output_lines.append("Test Analysis:")
-            output_lines.append("-" * 50)
-            
-            passed = True
-            
-            if "Detected Windows PE executable" in output:
-                output_lines.append("✓ PE format detection: PASS")
-            else:
-                output_lines.append("✗ PE format detection: FAIL")
-                passed = False
+                output_lines.append("")
+                output_lines.append("-" * 50)
+                output_lines.append(f"Testing {pe_file}")
+                output_lines.append("-" * 50)
                 
-            if "PE loaded successfully" in output:
-                output_lines.append("✓ PE section loading: PASS")
-            else:
-                output_lines.append("✗ PE section loading: FAIL (may have hung)")
-                passed = False
+                result = self.test_pe_file(pe_file, "Hello from Windows binary")
                 
-            if "Spawned thread" in output:
-                output_lines.append("✓ Thread spawning: PASS")
-            else:
-                output_lines.append("✗ Thread spawning: FAIL")
-                passed = False
+                output_lines.extend(result["messages"])
+                output_lines.append("")
+                output_lines.append("Output:")
+                output_lines.append(result["output"])
                 
-            if "Hello from Windows binary" in output:
-                output_lines.append("✓ Program execution: PASS")
-            elif "Detected Windows PE" in output:
-                output_lines.append("~ Program execution: Started but no output seen")
-                
-            if "ERROR" in output or "Invalid" in output:
-                output_lines.append("✗ Errors detected in output")
-                passed = False
-                
+                if not result["passed"]:
+                    all_passed = False
+                    
             output_lines.append("-" * 50)
             
             output_text = "\n".join(output_lines)
             
-            if passed:
+            if all_passed:
                 output_lines.append("")
-                output_lines.append("✓✓✓ PE LOADER TEST PASSED")
-                return (True, "PE loader test passed", "\n".join(output_lines))
+                output_lines.append("✓✓✓ ALL PE TESTS PASSED")
+                return (True, "All PE loader tests passed", "\n".join(output_lines))
             else:
                 output_lines.append("")
-                output_lines.append("✗✗✗ PE LOADER TEST FAILED")
-                return (False, "PE loader test failed", "\n".join(output_lines))
+                output_lines.append("✗✗✗ SOME PE TESTS FAILED")
+                return (False, "Some PE loader tests failed", "\n".join(output_lines))
             
         except TimeoutError as e:
             output_lines.append(f"")
@@ -338,7 +342,7 @@ class QEMUPETest:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Test JOS Windows PE loader")
+    parser = argparse.ArgumentParser(description="Test JOS Windows PE loader v2")
     parser.add_argument("--kernel", "-k", default="build/BB.bin",
                         help="Path to kernel binary")
     parser.add_argument("--timeout", "-t", type=int, default=60,

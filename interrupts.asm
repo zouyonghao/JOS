@@ -107,16 +107,37 @@ common_isr_handler:
     # Vector number is at 120(%rsp) = 15 regs * 8 + original push
 
     # For syscalls (vector 0x80), save register args to Java globals
+    # We save both Linux (RDI, RSI, RDX) and Windows (RCX, RDX, R8, R9) conventions
     cmpq $0x80, 120(%rsp)
     jne .not_syscall_save
     movq 112(%rsp), %rax
     movq %rax, kernel_Syscalls_syscallNum(%rip)        # RAX = syscall number
-    movq 64(%rsp), %rax
-    movq %rax, kernel_Syscalls_syscallArg1(%rip)       # RDI = arg1
-    movq 72(%rsp), %rax
-    movq %rax, kernel_Syscalls_syscallArg2(%rip)       # RSI = arg2
+    
+    # Check if this is a kernel32 call (syscallNum 1-16)
+    # For kernel32 calls, use Windows convention: RCX, RDX, R8, R9
+    cmpq $16, %rax
+    jg .linux_convention
+    testq %rax, %rax
+    jle .linux_convention
+    
+    # Windows convention: RCX=arg1, RDX=arg2, R8=arg3, R9=arg4
+    # Stack layout after pushes: RAX@112, RCX@104, RDX@96, RBX@88, RBP@80, RSI@72, RDI@64, R8@56, R9@48
+    movq 104(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg1(%rip)       # RCX = arg1 (Windows)
     movq 96(%rsp), %rax
-    movq %rax, kernel_Syscalls_syscallArg3(%rip)       # RDX = arg3
+    movq %rax, kernel_Syscalls_syscallArg2(%rip)       # RDX = arg2 (Windows)
+    movq 56(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg3(%rip)       # R8 = arg3 (Windows)
+    jmp .not_syscall_save
+    
+.linux_convention:
+    # Linux convention: RDI=arg1, RSI=arg2, RDX=arg3
+    movq 64(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg1(%rip)       # RDI = arg1 (Linux)
+    movq 72(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg2(%rip)       # RSI = arg2 (Linux)
+    movq 96(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg3(%rip)       # RDX = arg3 (Linux)
 .not_syscall_save:
 
     movq 120(%rsp), %rdi

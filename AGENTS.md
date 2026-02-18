@@ -46,7 +46,7 @@ The build compiles Java source to bytecode (`javac`), then `JavaToLLVM` translat
 ## Build, Test, and Development Commands
 - `make` or `make BB.bin` — full build (assembler + translator + clang + link)
 - `make clean && make` — clean rebuild
-- `make disk` — build disk image with user programs (hello.sbf, counter.sbf, win_hello.exe) embedded at 1MB offset
+- `make disk` — build disk image with user programs (hello.sbf, counter.sbf, win_dual_hello.exe) embedded at 1MB offset
 - `make qemu-disk` — boot with disk image (needed for `run` and `ls` shell commands)
 - `make test` — run automated test suite (boot, memory, command, pe tests)
 - `make test-boot` — run only boot test
@@ -112,15 +112,13 @@ The test harness uses `qemu-system-x86_64 -nographic` with QEMU monitor socket (
    > ls
    hello.sbf (4200 bytes)
    counter.sbf (4168 bytes)
-   win_hello.exe (3072 bytes)
+   win_dual_hello.exe (2048 bytes)
    > run hello.sbf
    Spawned thread 1
    > Hello from user program!
-   > run counter.sbf
+   > run win_dual_hello.exe
    Spawned thread 1
-   > Thread 1: count 0
-   Thread 1: count 1
-   ...
+   > Hello from Windows binary!
    > ps
    TID  STATE
    0    RUNNING
@@ -136,19 +134,50 @@ Key things to verify after changes:
 - Boot in QEMU and check: memory init shows `freePages > 0`, VM test prints `PASS`, command prompt `>` appears, keyboard input works, spinner animates.
 
 ## Windows PE Support
-JOS can now load Windows PE executables:
+JOS can load Windows PE executables that use kernel32.dll imports:
 - PE format auto-detection in `run` command (checks DOS magic `MZ` and PE signature)
-- PE loader parses headers and loads sections at runtime
-- Basic Windows syscall emulation (NtWriteFile, NtClose, NtTerminateProcess)
-- Test program: `win_hello.exe` (Windows clang compiled)
+- PE loader parses headers, loads sections, and processes import tables
+- kernel32.dll function emulation (GetStdHandle, WriteFile, ExitProcess)
+- Test program: `win_dual_hello.exe` (runs on both Windows and JOS)
+
+### kernel32.dll Import Table Support
+
+The PE loader:
+1. Parses the import table from the PE headers
+2. Resolves kernel32.dll function imports (GetStdHandle, WriteFile, ExitProcess)
+3. Creates emulation stubs that call into JOS kernel handlers
+4. Patches the Import Address Table (IAT) with stub addresses
+
+**Supported kernel32.dll Functions:**
+| Function | Description |
+|----------|-------------|
+| GetStdHandle | Returns handle for STD_OUTPUT_HANDLE (-11) |
+| WriteFile | Writes to console (handle 1) |
+| ExitProcess | Terminates the current thread |
 
 ### Creating Windows PE for JOS
-Use Windows clang with `-nostdlib` and JOS syscalls (`int 0x80`):
-```bash
-"/mnt/c/Program Files/LLVM/bin/clang.exe" \
-    --target=x86_64-windows-gnu -nostdlib -fuse-ld=lld \
-    -o win_hello.exe win_hello.S
+
+**Dual-Compatible Binary (recommended):**
+```c
+// win_dual_hello.c - Runs on both Windows and JOS
+#include <windows.h>
+
+void mainCRTStartup(void) {
+    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    const char* msg = "Hello from Windows binary!\r\n";
+    DWORD written;
+    WriteFile(hStdOut, msg, strlen(msg), &written, NULL);
+    ExitProcess(0);
+}
 ```
+
+Build with Windows clang:
+```bash
+cd user
+make win_dual_hello.exe
+```
+
+**Note**: The `mainCRTStartup` entry point must never return - use ExitProcess and mark with `__attribute__((noreturn))`.
 
 ### Testing PE Loader
 ```bash
@@ -157,7 +186,13 @@ make test-pe
 
 # Or manual test
 make qemu-disk
-# Then type: run win_hello.exe
+# In JOS shell: run win_dual_hello.exe
+```
+
+The binary will also run on actual Windows:
+```cmd
+C:\> win_dual_hello.exe
+Hello from Windows binary!
 ```
 
 ## Commit & Pull Request Guidelines

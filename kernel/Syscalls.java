@@ -11,6 +11,11 @@ public class Syscalls {
     public static final int SYS_YIELD = 3;
     public static final int SYS_GETPID = 4;
     
+    // kernel32.dll function IDs (must match Loader.java)
+    public static final int KERNEL32_GET_STD_HANDLE = 1;
+    public static final int KERNEL32_WRITE_FILE = 2;
+    public static final int KERNEL32_EXIT_PROCESS = 3;
+    
     // Syscall argument globals (accessed by assembly)
     private static long syscallNum = 0;
     private static long syscallArg1 = 0;
@@ -29,6 +34,11 @@ public class Syscalls {
     
     // Called from interrupt handler when vector == 0x80
     public static void handleSyscall() {
+        // Check if this is a kernel32.dll function call (RAX in range 1-16)
+        if (syscallNum >= KERNEL32_GET_STD_HANDLE && syscallNum <= 16) {
+            syscallRet = Loader.handleKernel32Call((int)syscallNum, syscallArg1, syscallArg2, syscallArg3, 0);
+            return;
+        }
         syscallRet = handleSyscallInternal(syscallNum, syscallArg1, syscallArg2, syscallArg3);
     }
     

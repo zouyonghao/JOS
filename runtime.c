@@ -248,3 +248,14 @@ void kernel_Native_callProgram_Long(int64_t entryPoint) {
   void (*prog)() = (void (*)())entryPoint;
   prog();
 }
+
+// =============================================================================
+// Windows Syscall MSR Initialization
+// Initialize MSRs for syscall/sysret instructions (Windows-compatible)
+// =============================================================================
+
+extern void init_syscall_msr(void);
+
+void kernel_Native_initSyscallMSR_V(void) {
+  init_syscall_msr();
+}

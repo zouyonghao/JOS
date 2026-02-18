@@ -22,14 +22,14 @@ cd user && make     # build user programs separately
 - `constants.inc` — shared assembly constants (segment selectors, memory addresses)
 - `build_kernel_custom.sh` — Java→LLVM→object compilation pipeline
 - `test/` — automated test suite
-- `user/` — user programs (hello.c, counter.c, win_hello.exe) with kernel API library
+- `user/` — user programs (hello.c, counter.c, win_dual_hello.exe) with kernel API library
 
 ## Architecture
 - **Threading**: Preemptive kernel threads, round-robin scheduler (10 ticks / ~100ms). Context switch via RSP swap in `interrupts.asm`. Thread RSP table at `0x880000`. Max 16 threads. Thread 0 = shell. Thread cleanup on exit frees stack memory.
 - **Memory**: E820 at `0x500`, bitmap at `0x100000`, heap at 4MB+, identity-mapped first 128MB with 2MB huge pages.
 - **Syscalls**: `int $0x80` with vector 128. SYS_PRINT=1, SYS_EXIT=2, SYS_YIELD=3, SYS_GETPID=4.
 - **User programs**: SBF format and Windows PE format, loaded from embedded filesystem at 1MB disk offset.
-- **PE Loader**: Auto-detects PE format, parses DOS/PE headers, loads sections, emulates Windows syscalls (NtWriteFile, NtClose, NtTerminateProcess).
+- **PE Loader**: Auto-detects PE format, parses DOS/PE headers, loads sections, processes import tables, emulates kernel32.dll functions (GetStdHandle, WriteFile, ExitProcess).
 
 ## Critical Constraints
 - E820 buffer addresses (`0x500`/`0x504`) must stay below `0x7C00` — kernel code loads at `0x7E00+`
