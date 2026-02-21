@@ -33,7 +33,7 @@ $(OBJDIR)/Kernel.o: kernel/*.java JavaToLLVM.java
 	./build_kernel_custom.sh
 
 $(OBJDIR)/runtime.o: runtime.c $(OBJDIR)
-	$(CC) -c runtime.c -o obj/runtime.o $(CFLAGS) $(OPTFLAGS) -fno-pic
+	$(CC) -c runtime.c -o obj/runtime.o $(CFLAGS) $(OPTFLAGS) $(64BITFLAGS) -fno-pic
 
 $(OBJDIR)/bootloader.o : bootloader.asm $(OBJDIR)
 	$(AS) bootloader.asm -o $(OBJDIR)/bootloader.o $(ASFLAGS)
@@ -80,7 +80,7 @@ test-pe: disk
 
 # Create disk image with user programs
 disk: BB.bin
-	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf user/win_dual_hello.exe
+	python3 makedisk.py $(BUILDDIR)/disk.img user/hello.sbf user/counter.sbf user/win_dual_hello.exe user/win_memtest.exe user/win_printf.exe user/win_threads.exe user/win_fileio.exe user/help.exe
 	@echo "Created $(BUILDDIR)/disk.img"
 	# Embed filesystem into kernel disk image at 1MB offset
 	python3 embed_fs.py $(BUILDDIR)/BB.bin $(BUILDDIR)/disk.img

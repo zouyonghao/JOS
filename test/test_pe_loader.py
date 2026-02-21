@@ -131,7 +131,7 @@ class QEMUPETest:
             # Start QEMU with monitor socket
             output_lines.append(f"Starting QEMU with {self.kernel_path}...")
             cmd = [
-                'qemu-system-x86_64', '-nographic',
+                'qemu-system-x86_64', '-accel', 'tcg', '-nographic',
                 '-device', 'isa-debug-exit,iobase=0xf4,iosize=0x04',
                 '-no-reboot',
                 '-drive', f'format=raw,file={self.kernel_path}',

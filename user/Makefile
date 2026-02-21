@@ -10,6 +10,7 @@ PYTHON = python3
 # Windows toolchain (via WSL)
 WIN_CLANG = "/mnt/c/Program Files/LLVM/bin/clang.exe"
 WIN_LLD_LINK = "/mnt/c/Program Files/LLVM/bin/lld-link.exe"
+WIN_LLVM_DLLTOOL = "/mnt/c/Program Files/LLVM/bin/llvm-dlltool.exe"
 WIN_CLANG_WORKS := $(shell test -f $(WIN_CLANG) && echo yes || echo no)
 
 # ============================================
@@ -41,7 +42,8 @@ USER_OBJS = $(USER_C_OBJS) $(USER_ASM_OBJS)
 
 # Programs to build
 PROGRAMS = hello.sbf counter.sbf
-WIN_PROGRAMS = win_dual_hello.exe
+WIN_PROGRAMS = win_dual_hello.exe win_memtest.exe win_echo.exe win_threads.exe win_fileio.exe
+WIN_PRINTF_PROGRAMS = win_printf.exe
 
 # ============================================
 # Phony targets
@@ -52,7 +54,7 @@ WIN_PROGRAMS = win_dual_hello.exe
 all: $(PROGRAMS)
 
 # Build everything including Windows PE
-all-all: $(PROGRAMS) $(WIN_PROGRAMS)
+all-all: $(PROGRAMS) $(WIN_PROGRAMS) $(WIN_PRINTF_PROGRAMS)
 
 # Check Windows clang availability
 check-win-clang:
@@ -111,12 +113,95 @@ else
 	@false
 endif
 
+# Windows PE: win_memtest.exe (kernel32.dll only - HeapAlloc test)
+win_memtest.exe: win_memtest.obj
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLD_LINK) -out:$@ -entry:mainCRTStartup -subsystem:console $< -libpath:"C:\\Windows\\System32" kernel32.lib
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_memtest.obj: win_memtest.c
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_CLANG) $(WIN_CFLAGS) -c -o $@ $<
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+# Windows PE: win_echo.exe (kernel32.dll only - stdin read test)
+win_echo.exe: win_echo.obj
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLD_LINK) -out:$@ -entry:mainCRTStartup -subsystem:console $< -libpath:"C:\\Windows\\System32" kernel32.lib
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_echo.obj: win_echo.c
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_CLANG) $(WIN_CFLAGS) -c -o $@ $<
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+# Windows PE: win_threads.exe (kernel32.dll only - CreateThread test)
+win_threads.exe: win_threads.obj
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLD_LINK) -out:$@ -entry:mainCRTStartup -subsystem:console $< -libpath:"C:\\Windows\\System32" kernel32.lib
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_threads.obj: win_threads.c
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_CLANG) $(WIN_CFLAGS) -c -o $@ $<
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+# Windows PE: win_fileio.exe (kernel32.dll only - CreateFileA test)
+win_fileio.exe: win_fileio.obj
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLD_LINK) -out:$@ -entry:mainCRTStartup -subsystem:console $< -libpath:"C:\\Windows\\System32" kernel32.lib
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_fileio.obj: win_fileio.c
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_CLANG) $(WIN_CFLAGS) -c -o $@ $<
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+# Windows PE: win_printf.exe (uses msvcrt.dll - printf/malloc test)
+# Requires generating an import library from msvcrt.def
+libmsvcrt.a: msvcrt.def
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLVM_DLLTOOL) -m i386:x86-64 -d $< -l $@
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_printf.exe: win_printf.obj libmsvcrt.a
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_LLD_LINK) -out:$@ -entry:mainCRTStartup -subsystem:console win_printf.obj libmsvcrt.a
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
+win_printf.obj: win_printf.c
+ifeq ($(WIN_CLANG_WORKS),yes)
+	$(WIN_CLANG) $(WIN_CFLAGS) -c -o $@ $<
+else
+	@echo "ERROR: Windows clang not found"; @false
+endif
+
 # ============================================
 # Utility targets
 # ============================================
 clean:
 	rm -f *.o lib/*.o *.elf $(PROGRAMS)
-	rm -f *.obj $(WIN_PROGRAMS)
+	rm -f *.obj $(WIN_PROGRAMS) $(WIN_PRINTF_PROGRAMS)
 
 # Debug target to inspect ELF
 inspect: hello.elf

@@ -113,9 +113,9 @@ common_isr_handler:
     movq 112(%rsp), %rax
     movq %rax, kernel_Syscalls_syscallNum(%rip)        # RAX = syscall number
     
-    # Check if this is a kernel32 call (syscallNum 1-16)
+    # Check if this is a kernel32 call (syscallNum 1-64)
     # For kernel32 calls, use Windows convention: RCX, RDX, R8, R9
-    cmpq $16, %rax
+    cmpq $128, %rax
     jg .linux_convention
     testq %rax, %rax
     jle .linux_convention
@@ -128,6 +128,8 @@ common_isr_handler:
     movq %rax, kernel_Syscalls_syscallArg2(%rip)       # RDX = arg2 (Windows)
     movq 56(%rsp), %rax
     movq %rax, kernel_Syscalls_syscallArg3(%rip)       # R8 = arg3 (Windows)
+    movq 48(%rsp), %rax
+    movq %rax, kernel_Syscalls_syscallArg4(%rip)       # R9 = arg4 (Windows)
     jmp .not_syscall_save
     
 .linux_convention:
@@ -141,6 +143,66 @@ common_isr_handler:
 .not_syscall_save:
 
     movq 120(%rsp), %rdi
+
+    # For CPU exceptions (vectors < 32), save crash RIP for debug
+    cmpq $32, %rdi
+    jge .no_crash_save
+
+    # For exceptions that push error codes (8, 10-14, 17, 21, 29, 30),
+    # the error code sits between vector and RIP on stack.
+    # Stack: [15 GPRs=120] [vector=8] [error_code=8] [RIP=8] ...
+    # So RIP is at offset 120+8+8+0 = 136 for error-code exceptions
+    # For non-error-code exceptions: [15 GPRs=120] [vector=8] [RIP=8] ...
+    # So RIP is at offset 120+8+0 = 128
+
+    # Check if this vector pushes an error code
+    cmpq $8, %rdi
+    je .has_error_code
+    cmpq $10, %rdi
+    je .has_error_code
+    cmpq $11, %rdi
+    je .has_error_code
+    cmpq $12, %rdi
+    je .has_error_code
+    cmpq $13, %rdi
+    je .has_error_code
+    cmpq $14, %rdi
+    je .has_error_code
+    cmpq $17, %rdi
+    je .has_error_code
+    cmpq $21, %rdi
+    je .has_error_code
+    cmpq $29, %rdi
+    je .has_error_code
+    cmpq $30, %rdi
+    je .has_error_code
+
+    # No error code: RIP at 128(%rsp)
+    movq 128(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashRIP(%rip)
+    movq $0, kernel_Interrupts_crashErrorCode(%rip)
+    jmp .no_crash_save
+
+.has_error_code:
+    # Error code at 128(%rsp), RIP at 136(%rsp)
+    movq 128(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashErrorCode(%rip)
+    movq 136(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashRIP(%rip)
+
+    # Dump raw stack values for debugging
+    movq 120(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashStack120(%rip)
+    movq 128(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashStack128(%rip)
+    movq 136(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashStack136(%rip)
+    movq 144(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashStack144(%rip)
+    movq 152(%rsp), %rax
+    movq %rax, kernel_Interrupts_crashStack152(%rip)
+
+.no_crash_save:
     call interrupt_dispatch
 
     # For syscalls, write return value back to saved RAX

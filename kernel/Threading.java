@@ -203,4 +203,15 @@ public class Threading {
     public static long getCtxLoadRSP() { return ctxLoadRSP; }
     public static void clearCtxLoadRSP() { ctxLoadRSP = 0; }
     public static int getCurrentThreadId() { return currentThreadId; }
+
+    // Phase 4: Thread state queries for WaitForSingleObject
+    public static boolean isThreadTerminated(int tid) {
+        if (tid < 0 || tid >= MAX_THREADS) return true;
+        return threadState[tid] == THREAD_TERMINATED || threadState[tid] == THREAD_FREE;
+    }
+
+    public static int getThreadState(int tid) {
+        if (tid < 0 || tid >= MAX_THREADS) return THREAD_FREE;
+        return threadState[tid];
+    }
 }

@@ -22,6 +22,15 @@ public class Interrupts {
     private static final char IDT_INT_GATE = 0x0E;
     private static final char KERNEL_INT_GATE = (char) (IDT_PRESENT | IDT_INT_GATE);
 
+    // Crash debug info (set by assembly on CPU exceptions)
+    private static long crashRIP = 0;
+    private static long crashErrorCode = 0;
+    private static long crashStack120 = 0;
+    private static long crashStack128 = 0;
+    private static long crashStack136 = 0;
+    private static long crashStack144 = 0;
+    private static long crashStack152 = 0;
+
     // Timer state
     private static volatile int tickCount = 0;
     private static int lastDisplayedTick = -1;
@@ -124,7 +133,7 @@ public class Interrupts {
             // Timer interrupt
             tickCount = tickCount + 1;
             Native.incTicks();
-            
+
             // Show spinner on screen
             if (tickCount % 10 == 0) {
                 int idx = (tickCount / 10) & 3;
@@ -135,10 +144,10 @@ public class Interrupts {
                 else c = '\\';
                 Console.writeCharAt(c, 79, 0);
             }
-            
+
             // Check for context switch
             Threading.schedule();
-            
+
             Native.sendEOI(0);
         } else if (vector == 0x21) {
             // Keyboard interrupt
@@ -151,7 +160,47 @@ public class Interrupts {
         } else if (vector == 0x80) {
             // System call
             Syscalls.handleSyscall();
+        } else if (vector >= 0 && vector < 32) {
+            // CPU exception - check if inside PE loaded range
+            handleCpuException(vector);
         }
+    }
+
+    // Phase 5: Graceful PE fault handling
+    private static void handleCpuException(int vector) {
+        if (Loader.getPeLoadedBase() != 0) {
+            int tid = Threading.getCurrentThreadId();
+            if (tid != 0) {
+                Console.writeString("\nPE FAULT: vec ");
+                Console.writeNumber(vector);
+                Console.writeString(" tid=");
+                Console.writeNumber(tid);
+                Console.writeString("\n  RIP=");
+                Console.writeHex(crashRIP);
+                Console.writeString("\n  errCode=");
+                Console.writeHex(crashErrorCode);
+                Console.writeString("\n  stk120=");
+                Console.writeHex(crashStack120);
+                Console.writeString("\n  stk128=");
+                Console.writeHex(crashStack128);
+                Console.writeString("\n  stk136=");
+                Console.writeHex(crashStack136);
+                Console.writeString("\n  stk144=");
+                Console.writeHex(crashStack144);
+                Console.writeString("\n  stk152=");
+                Console.writeHex(crashStack152);
+                Console.writeString("\n");
+                Threading.terminateCurrentThread();
+                return;
+            }
+        }
+        Console.writeString("\nCPU EXCEPTION: vector ");
+        Console.writeNumber(vector);
+        Console.writeString("\n  RIP=");
+        Console.writeHex(crashRIP);
+        Console.writeString("\n  errCode=");
+        Console.writeHex(crashErrorCode);
+        Console.writeString("\n");
     }
     
     private static void handleScancode(char scancode) {

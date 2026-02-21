@@ -45,6 +45,7 @@ class MemoryTest:
         
         cmd = [
             "qemu-system-x86_64",
+            "-accel", "tcg",
             "-nographic",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
             "-no-reboot",

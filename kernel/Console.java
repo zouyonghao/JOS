@@ -39,7 +39,21 @@ public class Console {
         cursorX = 0;
         cursorY = cursorY + 1;
         if (cursorY >= SCREEN_HEIGHT) {
-            cursorY = 0;
+            scrollUp();
+            cursorY = SCREEN_HEIGHT - 1;
+        }
+    }
+
+    private static void scrollUp() {
+        // Copy rows 1..24 to 0..23 using memcpy (fast bulk copy)
+        long vgaBase = 0xB8000L;
+        long rowBytes = (long)(SCREEN_WIDTH * 2);
+        Native.memcpy(vgaBase, vgaBase + rowBytes, rowBytes * (SCREEN_HEIGHT - 1));
+        // Clear the last row
+        int x = 0;
+        while (x < SCREEN_WIDTH) {
+            writeCharAt(' ', x, SCREEN_HEIGHT - 1);
+            x = x + 1;
         }
     }
 
