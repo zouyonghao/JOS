@@ -6,6 +6,14 @@
 .global boot
 .global init
 
+# =========================================================================
+# Sector budget: 194 sectors = 99,328 bytes max kernel size
+#   Stage 1: sectors 2-66    (65 sectors)  → 0x7E00..0xFFFF  (33,280 bytes)
+#   Stage 2: sectors 67-194  (128 sectors) → 0x10000..0x1FFFF (65,536 bytes)
+#   Boot:    sector 1        (1 sector)    → 0x7C00..0x7DFF  (512 bytes)
+# To increase: raise AL in stage 2 read (currently 128), update check_size.py
+# =========================================================================
+
 boot:
 	ljmp 0x0000, .flush_CS	# flush cs in case BIOS set it to 0x07C0
 
@@ -34,7 +42,7 @@ boot:
 	mov ax, 0x1000
 	mov es, ax		# ES = 0x1000
 	xor bx, bx		# BX = 0 → destination = 0x1000:0x0000
-	mov ax, 0x0240		# ah = 0x02 (read), al = 64 sectors
+	mov ax, 0x0280		# ah = 0x02 (read), al = 128 sectors
 	mov cx, 0x0004		# ch = 0x00 (cylinder), cl = 0x04 (sector 4)
 	mov dh, 1		# head 1
 	movb dl, [disk]		# drive number

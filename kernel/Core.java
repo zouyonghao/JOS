@@ -22,16 +22,23 @@ public class Core {
         
         // Initialize memory management
         Memory.initMemoryMap();
+        if (Memory.getTotalPages() == 0) {
+            Console.writeString("FATAL: No usable memory pages found!\n");
+            halt();
+        }
         Memory.initPaging();
-        
+
         // Initialize heap
         Memory.initHeap();
-        
+
         // Initialize threading
         Threading.initThreading();
-        
+
         // Initialize filesystem
         Filesystem.initFilesystem();
+        if (!Filesystem.isInitialized()) {
+            Console.writeString("WARNING: Filesystem not initialized\n");
+        }
         
         // Initialize PE loader
         Loader.initWinHandles();
@@ -55,5 +62,12 @@ public class Core {
 
     public static void main(String[] args) {
         // Dummy main for compilation
+    }
+
+    public static void halt() {
+        Native.disableInterrupts();
+        while (true) {
+            // Infinite loop — CPU halted
+        }
     }
 }

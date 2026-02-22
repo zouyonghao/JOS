@@ -69,6 +69,12 @@ public class Memory {
         Console.writeString("E820 entries: ");
         Console.writeNumber(entryCount);
         Console.writeString("\n");
+
+        if (entryCount > 20) {
+            Console.writeString("WARNING: E820 has ");
+            Console.writeNumber(entryCount);
+            Console.writeString(" entries, only processing first 20\n");
+        }
         
         // Clear bitmap
         int offset = 0;
@@ -264,6 +270,13 @@ public class Memory {
     }
     
     private static long getBlockSize(long header) {
+        return header & ~HEAP_ALLOCATED_FLAG;
+    }
+
+    // Public accessor: get allocated block's user-data size from user pointer
+    public static long getAllocatedBlockSize(long userPtr) {
+        long headerAddr = userPtr - HEAP_HEADER_SIZE;
+        long header = Native.readMemoryLong(headerAddr);
         return header & ~HEAP_ALLOCATED_FLAG;
     }
     

@@ -166,6 +166,12 @@ public class Loader {
     private static final int FUNC_RTL_LOOKUP_FUNCTION_ENTRY = 58;
     private static final int FUNC_RTL_CAPTURE_CONTEXT = 59;
     private static final int FUNC_GET_MODULE_HANDLE_W = 60;
+    private static final int FUNC_LOAD_LIBRARY_W = 61;
+    private static final int FUNC_GET_PROC_ADDRESS = 62;
+    private static final int FUNC_FREE_LIBRARY = 63;
+    private static final int FUNC_GET_SYSTEM_DIRECTORY_W = 64;
+    private static final int FUNC_GET_STARTUP_INFO_W = 65;
+    private static final int FUNC_SET_UNHANDLED_EXC_FILTER = 66;
 
     // Per-thread last error
     private static long[] winLastError = new long[16];
@@ -290,6 +296,9 @@ public class Loader {
             entryPoint = loadSBF(buffer, fileSize);
         }
 
+        // Free the file buffer (loadPE/loadSBF copies data to execMem)
+        Memory.heapFree(buffer);
+
         return entryPoint;
     }
 
@@ -361,6 +370,24 @@ public class Loader {
         int sizeOfImage = readUInt32LE(buffer, optHeaderOffset + OPT_SIZEOFIMAGE_OFFSET);
         int sizeOfHeaders = readUInt32LE(buffer, optHeaderOffset + OPT_SIZEOFHEADERS_OFFSET);
 
+        // Validate PE header values
+        if (numSections < 0 || numSections > 96) {
+            Console.writeString("ERROR: Invalid PE numSections: ");
+            Console.writeNumber(numSections);
+            Console.writeString("\n");
+            return 0;
+        }
+        if (sizeOfImage <= 0 || sizeOfImage > 0x2000000) {
+            Console.writeString("ERROR: Invalid PE sizeOfImage: ");
+            Console.writeNumber(sizeOfImage);
+            Console.writeString("\n");
+            return 0;
+        }
+        if (sizeOfHeaders > sizeOfImage || sizeOfHeaders > fileSize) {
+            Console.writeString("ERROR: Invalid PE sizeOfHeaders\n");
+            return 0;
+        }
+
         long execMem = Memory.heapAlloc(sizeOfImage);
         if (execMem == 0) {
             Console.writeString("ERROR: Could not allocate executable memory\n");
@@ -391,7 +418,12 @@ public class Loader {
             if (rawSize < copySize) copySize = rawSize;
 
             if (copySize > 0 && rawAddr > 0) {
-                Native.memcpy(execMem + virtAddr, buffer + rawAddr, (long)copySize);
+                // Validate section bounds
+                if (virtAddr + copySize > sizeOfImage || rawAddr + copySize > fileSize) {
+                    Console.writeString("WARNING: Section bounds exceed image/file, skipping\n");
+                } else {
+                    Native.memcpy(execMem + virtAddr, buffer + rawAddr, (long)copySize);
+                }
             }
 
             s = s + 1;
@@ -843,15 +875,22 @@ public class Loader {
                     // GetStringTypeW
                     return createEmulatedFunc(FUNC_GET_STRING_TYPE_W);
                 }
-                // GetStartupInfoA
-                if (c5 == 'a') return createEmulatedFunc(FUNC_GET_STARTUP_INFO_A);
+                // GetStartupInfoA / GetStartupInfoW
+                if (c5 == 'a') {
+                    char c14 = (char)(Native.readMemoryLong(execMem + nameOffset + 14) & 0xFF);
+                    if (c14 == 'W') return createEmulatedFunc(FUNC_GET_STARTUP_INFO_W);
+                    return createEmulatedFunc(FUNC_GET_STARTUP_INFO_A);
+                }
             }
             // GetLastError
             if (c1 == 'e' && c2 == 't' && c3 == 'L' && c4 == 'a') {
                 return createEmulatedFunc(FUNC_GET_LAST_ERROR);
             }
-            // GetProcessHeap
+            // GetProcAddress
             if (c1 == 'e' && c2 == 't' && c3 == 'P' && c4 == 'r') {
+                char c5 = (char)(Native.readMemoryLong(execMem + nameOffset + 5) & 0xFF);
+                if (c5 == 'o') return createEmulatedFunc(FUNC_GET_PROC_ADDRESS);
+                // GetProcessHeap
                 return createEmulatedFunc(FUNC_GET_PROCESS_HEAP);
             }
             // GetCommandLineA / GetConsoleMode / GetConsoleOutputCP
@@ -900,9 +939,11 @@ public class Loader {
             if (c1 == 'e' && c2 == 't' && c3 == 'T' && c4 == 'i') {
                 return createEmulatedFunc(FUNC_GET_TICK_COUNT);
             }
-            // GetSystemTimeAsFileTime
+            // GetSystemTimeAsFileTime / GetSystemDirectoryW
             if (c1 == 'e' && c2 == 't' && c3 == 'S' && c4 == 'y') {
-                return createEmulatedFunc(FUNC_GET_SYSTEM_TIME_AS_FILE_TIME);
+                char c5 = (char)(Native.readMemoryLong(execMem + nameOffset + 5) & 0xFF);
+                if (c5 == 't') return createEmulatedFunc(FUNC_GET_SYSTEM_TIME_AS_FILE_TIME);
+                if (c5 == 'D') return createEmulatedFunc(FUNC_GET_SYSTEM_DIRECTORY_W);
             }
             // GetFileSize / GetFileType
             if (c1 == 'e' && c2 == 't' && c3 == 'F' && c4 == 'i') {
@@ -997,6 +1038,10 @@ public class Loader {
             if (c1 == 'e' && c2 == 'a' && c3 == 'v' && c4 == 'e') {
                 return createEmulatedFunc(FUNC_LEAVE_CRIT_SECTION);
             }
+            // LoadLibraryW
+            if (c1 == 'o' && c2 == 'a' && c3 == 'd' && c4 == 'L') {
+                return createEmulatedFunc(FUNC_LOAD_LIBRARY_W);
+            }
         }
 
         if (c0 == 'R') {
@@ -1065,6 +1110,10 @@ public class Loader {
             // FreeEnvironmentStringsA
             if (c1 == 'r' && c2 == 'e' && c3 == 'e' && c4 == 'E') {
                 return createEmulatedFunc(FUNC_FREE_ENVIRONMENT_STRINGS_A);
+            }
+            // FreeLibrary
+            if (c1 == 'r' && c2 == 'e' && c3 == 'e' && c4 == 'L') {
+                return createEmulatedFunc(FUNC_FREE_LIBRARY);
             }
             // FormatMessageW
             if (c1 == 'o' && c2 == 'r' && c3 == 'm' && c4 == 'a') {
@@ -1139,16 +1188,24 @@ public class Loader {
         int funcId = identifyMsvcrtFunc(c0, c1, c2, c3, execMem, nameOffset);
 
         // Handle data imports first - return raw variable address, not a call stub
-        // (must be separate branches to avoid long/int local slot overlap bug in translator)
         if (funcId == MSVCRT_FMODE) {
             return Native.getMsvcrtFuncAddr(37);
         }
         if (funcId == MSVCRT_COMMODE) {
             return Native.getMsvcrtFuncAddr(38);
         }
+        if (funcId == MSVCRT_WCMDLN) {
+            return Native.getMsvcrtFuncAddr(52);
+        }
+
+        // Check if this function has a Java implementation
+        int javaId = msvcrtToJavaId(funcId);
+        if (javaId > 0) {
+            return createEmulatedFunc(javaId);
+        }
+
+        // Fall back to C direct-call stub for remaining functions
         if (funcId > 0) {
-            // Inline the native call directly into createDirectCallStub to avoid
-            // storing a long in a local slot that overflows adjacent int slots
             return createDirectCallStub(Native.getMsvcrtFuncAddr(funcId));
         }
 
@@ -1163,6 +1220,61 @@ public class Loader {
         }
         Console.writeString("\n");
         return createEmulatedFunc(FUNC_GET_LAST_ERROR);
+    }
+
+    // Map C-side MSVCRT_* IDs to Java dispatch IDs (100+)
+    // Returns 0 for functions that must stay in C
+    private static int msvcrtToJavaId(int cFuncId) {
+        // Batch A: Trivial stubs
+        if (cFuncId == MSVCRT_EXIT) return MSVCRT_J_EXIT;
+        if (cFuncId == MSVCRT_ABORT) return MSVCRT_J_ABORT;
+        if (cFuncId == MSVCRT_CEXIT) return MSVCRT_J_CEXIT;
+        if (cFuncId == MSVCRT_AMSG_EXIT) return MSVCRT_J_AMSG_EXIT;
+        if (cFuncId == MSVCRT_TERMINATE) return MSVCRT_J_TERMINATE;
+        if (cFuncId == MSVCRT_FFLUSH) return MSVCRT_J_FFLUSH;
+        if (cFuncId == MSVCRT_SETUSERMATHERR) return MSVCRT_J_SETUSERMATHERR;
+        if (cFuncId == MSVCRT_C_SPECIFIC_HANDLER) return MSVCRT_J_C_SPECIFIC_HANDLER;
+        if (cFuncId == MSVCRT_SET_APP_TYPE) return MSVCRT_J_SET_APP_TYPE;
+        if (cFuncId == MSVCRT_XCPTFILTER) return MSVCRT_J_XCPTFILTER;
+        if (cFuncId == MSVCRT_WSYSTEM) return MSVCRT_J_WSYSTEM;
+        // Batch B: Character functions
+        if (cFuncId == MSVCRT_ISDIGIT) return MSVCRT_J_ISDIGIT;
+        if (cFuncId == MSVCRT_ISALPHA) return MSVCRT_J_ISALPHA;
+        if (cFuncId == MSVCRT_ISSPACE) return MSVCRT_J_ISSPACE;
+        if (cFuncId == MSVCRT_TOUPPER) return MSVCRT_J_TOUPPER;
+        if (cFuncId == MSVCRT_TOLOWER_FUNC) return MSVCRT_J_TOLOWER;
+        if (cFuncId == MSVCRT_PUTCHAR) return MSVCRT_J_PUTCHAR;
+        if (cFuncId == MSVCRT_ATOI) return MSVCRT_J_ATOI;
+        // Batch C: String functions
+        if (cFuncId == MSVCRT_STRLEN) return MSVCRT_J_STRLEN;
+        if (cFuncId == MSVCRT_STRCMP) return MSVCRT_J_STRCMP;
+        if (cFuncId == MSVCRT_STRNCMP) return MSVCRT_J_STRNCMP;
+        if (cFuncId == MSVCRT_STRCPY) return MSVCRT_J_STRCPY;
+        if (cFuncId == MSVCRT_STRNCPY) return MSVCRT_J_STRNCPY;
+        if (cFuncId == MSVCRT_STRCAT) return MSVCRT_J_STRCAT;
+        if (cFuncId == MSVCRT_STRCHR) return MSVCRT_J_STRCHR;
+        if (cFuncId == MSVCRT_STRRCHR) return MSVCRT_J_STRRCHR;
+        if (cFuncId == MSVCRT_PUTS) return MSVCRT_J_PUTS;
+        // Batch D: Memory functions
+        if (cFuncId == MSVCRT_MEMCPY) return MSVCRT_J_MEMCPY;
+        if (cFuncId == MSVCRT_MEMSET) return MSVCRT_J_MEMSET;
+        if (cFuncId == MSVCRT_MEMCMP) return MSVCRT_J_MEMCMP;
+        if (cFuncId == MSVCRT_MEMMOVE) return MSVCRT_J_MEMMOVE;
+        // Batch E: Heap functions
+        if (cFuncId == MSVCRT_MALLOC) return MSVCRT_J_MALLOC;
+        if (cFuncId == MSVCRT_FREE) return MSVCRT_J_FREE;
+        if (cFuncId == MSVCRT_CALLOC) return MSVCRT_J_CALLOC;
+        if (cFuncId == MSVCRT_REALLOC) return MSVCRT_J_REALLOC;
+        // Batch F: Wide-string functions
+        if (cFuncId == MSVCRT_WCSNICMP) return MSVCRT_J_WCSNICMP;
+        if (cFuncId == MSVCRT_WCSCAT_S) return MSVCRT_J_WCSCAT_S;
+        if (cFuncId == MSVCRT_WCSCPY_S) return MSVCRT_J_WCSCPY_S;
+        if (cFuncId == MSVCRT_ULTOW) return MSVCRT_J_ULTOW;
+        // Batch G: Misc
+        if (cFuncId == MSVCRT_SETLOCALE) return MSVCRT_J_SETLOCALE;
+        if (cFuncId == MSVCRT_IOBFUNC) return MSVCRT_J_IOBFUNC;
+        if (cFuncId == MSVCRT_STRTOL) return MSVCRT_J_STRTOL;
+        return 0; // stays in C
     }
 
     // msvcrt function IDs for Native.getMsvcrtFuncAddr()
@@ -1216,6 +1328,61 @@ public class Loader {
     private static final int MSVCRT_ULTOW = 48;
     private static final int MSVCRT_SETLOCALE = 49;
     private static final int MSVCRT_CEXIT = 50;
+    private static final int MSVCRT_VSNWPRINTF = 51;
+    private static final int MSVCRT_WCMDLN = 52;  // data
+
+    // ===================================================================
+    // MSVCRT JAVA DISPATCH IDs (100-199, used via int 0x80 stubs)
+    // These functions are implemented in Java instead of C
+    // ===================================================================
+    private static final int MSVCRT_J_EXIT = 100;
+    private static final int MSVCRT_J_ABORT = 101;
+    private static final int MSVCRT_J_CEXIT = 102;
+    private static final int MSVCRT_J_AMSG_EXIT = 103;
+    private static final int MSVCRT_J_TERMINATE = 104;
+    private static final int MSVCRT_J_FFLUSH = 105;
+    private static final int MSVCRT_J_SETUSERMATHERR = 106;
+    private static final int MSVCRT_J_C_SPECIFIC_HANDLER = 107;
+    private static final int MSVCRT_J_SET_APP_TYPE = 108;
+    private static final int MSVCRT_J_XCPTFILTER = 109;
+    private static final int MSVCRT_J_WSYSTEM = 110;
+    // Batch B: Character functions
+    private static final int MSVCRT_J_ISDIGIT = 111;
+    private static final int MSVCRT_J_ISALPHA = 112;
+    private static final int MSVCRT_J_ISSPACE = 113;
+    private static final int MSVCRT_J_TOUPPER = 114;
+    private static final int MSVCRT_J_TOLOWER = 115;
+    private static final int MSVCRT_J_PUTCHAR = 116;
+    private static final int MSVCRT_J_ATOI = 117;
+    // Batch C: String functions
+    private static final int MSVCRT_J_STRLEN = 118;
+    private static final int MSVCRT_J_STRCMP = 119;
+    private static final int MSVCRT_J_STRNCMP = 120;
+    private static final int MSVCRT_J_STRCPY = 121;
+    private static final int MSVCRT_J_STRNCPY = 122;
+    private static final int MSVCRT_J_STRCAT = 123;
+    private static final int MSVCRT_J_STRCHR = 124;
+    private static final int MSVCRT_J_STRRCHR = 125;
+    private static final int MSVCRT_J_PUTS = 126;
+    // Batch D: Memory functions
+    private static final int MSVCRT_J_MEMCPY = 127;
+    private static final int MSVCRT_J_MEMSET = 128;
+    private static final int MSVCRT_J_MEMCMP = 129;
+    private static final int MSVCRT_J_MEMMOVE = 130;
+    // Batch E: Heap functions
+    private static final int MSVCRT_J_MALLOC = 131;
+    private static final int MSVCRT_J_FREE = 132;
+    private static final int MSVCRT_J_CALLOC = 133;
+    private static final int MSVCRT_J_REALLOC = 134;
+    // Batch F: Wide-string functions
+    private static final int MSVCRT_J_WCSNICMP = 135;
+    private static final int MSVCRT_J_WCSCAT_S = 136;
+    private static final int MSVCRT_J_WCSCPY_S = 137;
+    private static final int MSVCRT_J_ULTOW = 138;
+    // Batch G: Misc
+    private static final int MSVCRT_J_SETLOCALE = 139;
+    private static final int MSVCRT_J_IOBFUNC = 140;
+    private static final int MSVCRT_J_STRTOL = 141;
 
     private static int identifyMsvcrtFunc(char c0, char c1, char c2, char c3, long execMem, int nameOffset) {
         if (c0 == 'p') {
@@ -1346,6 +1513,15 @@ public class Loader {
             if (x1 == 'u' && (char)(Native.readMemoryLong(execMem + nameOffset + 2) & 0xFF) == 'l') {
                 return MSVCRT_ULTOW;
             }
+            // _vsnwprintf
+            if (x1 == 'v' && (char)(Native.readMemoryLong(execMem + nameOffset + 2) & 0xFF) == 's') {
+                return MSVCRT_VSNWPRINTF;
+            }
+            // _wcmdln (DATA)
+            if (x1 == 'w' && (char)(Native.readMemoryLong(execMem + nameOffset + 2) & 0xFF) == 'c') {
+                char x3 = (char)(Native.readMemoryLong(execMem + nameOffset + 3) & 0xFF);
+                if (x3 == 'm') return MSVCRT_WCMDLN;
+            }
         }
         // ?terminate@@YAXXZ
         if (c0 == '?') {
@@ -1395,6 +1571,7 @@ public class Loader {
         long stubAddr = emulatedFuncAddrs + nextEmulatedFuncSlot * 64;
         nextEmulatedFuncSlot = nextEmulatedFuncSlot + 1;
         if (nextEmulatedFuncSlot >= MAX_EMULATED_FUNCS) {
+            Console.writeString("WARNING: Emulated function stub overflow, wrapping!\n");
             nextEmulatedFuncSlot = 0; // wrap (should not happen)
         }
 
@@ -1425,6 +1602,7 @@ public class Loader {
         long stubAddr = emulatedFuncAddrs + nextEmulatedFuncSlot * 64;
         nextEmulatedFuncSlot = nextEmulatedFuncSlot + 1;
         if (nextEmulatedFuncSlot >= MAX_EMULATED_FUNCS) {
+            Console.writeString("WARNING: Direct call stub overflow, wrapping!\n");
             nextEmulatedFuncSlot = 0;
         }
 
@@ -1496,11 +1674,513 @@ public class Loader {
     }
 
     // ===================================================================
+    // MSVCRT JAVA FUNCTION DISPATCH (IDs 100-199)
+    // ===================================================================
+
+    // Static state for setlocale and iob_func
+    private static long localeStringAddr = 0;
+    private static long fakeIobAddr = 0;
+
+    public static long handleMsvcrtCall(int funcId, long arg1, long arg2, long arg3, long arg4) {
+        // Batch A: Trivial stubs
+        if (funcId == MSVCRT_J_EXIT) {
+            Threading.terminateCurrentThread();
+            return 0;
+        }
+        if (funcId == MSVCRT_J_ABORT) {
+            Console.writeString("abort() called\n");
+            Threading.terminateCurrentThread();
+            return 0;
+        }
+        if (funcId == MSVCRT_J_CEXIT) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_AMSG_EXIT) {
+            Threading.terminateCurrentThread();
+            return 0;
+        }
+        if (funcId == MSVCRT_J_TERMINATE) {
+            Threading.terminateCurrentThread();
+            return 0;
+        }
+        if (funcId == MSVCRT_J_FFLUSH) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_SETUSERMATHERR) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_C_SPECIFIC_HANDLER) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_SET_APP_TYPE) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_XCPTFILTER) {
+            return 0;
+        }
+        if (funcId == MSVCRT_J_WSYSTEM) {
+            return -1;
+        }
+
+        // Batch B: Character functions
+        if (funcId == MSVCRT_J_ISDIGIT) {
+            return (arg1 >= 48 && arg1 <= 57) ? 1 : 0;
+        }
+        if (funcId == MSVCRT_J_ISALPHA) {
+            if (arg1 >= 65 && arg1 <= 90) return 1;
+            if (arg1 >= 97 && arg1 <= 122) return 1;
+            return 0;
+        }
+        if (funcId == MSVCRT_J_ISSPACE) {
+            if (arg1 == 32) return 1;
+            if (arg1 == 9) return 1;
+            if (arg1 == 10) return 1;
+            if (arg1 == 13) return 1;
+            if (arg1 == 12) return 1;
+            if (arg1 == 11) return 1;
+            return 0;
+        }
+        if (funcId == MSVCRT_J_TOUPPER) {
+            if (arg1 >= 97 && arg1 <= 122) return arg1 - 32;
+            return arg1;
+        }
+        if (funcId == MSVCRT_J_TOLOWER) {
+            if (arg1 >= 65 && arg1 <= 90) return arg1 + 32;
+            return arg1;
+        }
+        if (funcId == MSVCRT_J_PUTCHAR) {
+            Console.writeChar((char)(arg1 & 0xFF));
+            return arg1;
+        }
+        if (funcId == MSVCRT_J_ATOI) {
+            return msvcrt_java_atoi(arg1);
+        }
+
+        // Batch C: String functions
+        if (funcId == MSVCRT_J_STRLEN) {
+            return msvcrt_java_strlen(arg1);
+        }
+        if (funcId == MSVCRT_J_STRCMP) {
+            return msvcrt_java_strcmp(arg1, arg2);
+        }
+        if (funcId == MSVCRT_J_STRNCMP) {
+            return msvcrt_java_strncmp(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_STRCPY) {
+            return msvcrt_java_strcpy(arg1, arg2);
+        }
+        if (funcId == MSVCRT_J_STRNCPY) {
+            return msvcrt_java_strncpy(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_STRCAT) {
+            return msvcrt_java_strcat(arg1, arg2);
+        }
+        if (funcId == MSVCRT_J_STRCHR) {
+            return msvcrt_java_strchr(arg1, arg2);
+        }
+        if (funcId == MSVCRT_J_STRRCHR) {
+            return msvcrt_java_strrchr(arg1, arg2);
+        }
+        if (funcId == MSVCRT_J_PUTS) {
+            return msvcrt_java_puts(arg1);
+        }
+
+        // Batch D: Memory functions
+        if (funcId == MSVCRT_J_MEMCPY) {
+            Native.memcpy(arg1, arg2, arg3);
+            return arg1;
+        }
+        if (funcId == MSVCRT_J_MEMSET) {
+            Native.memset(arg1, (int)(arg2 & 0xFF), arg3);
+            return arg1;
+        }
+        if (funcId == MSVCRT_J_MEMCMP) {
+            return msvcrt_java_memcmp(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_MEMMOVE) {
+            return msvcrt_java_memmove(arg1, arg2, arg3);
+        }
+
+        // Batch E: Heap functions
+        if (funcId == MSVCRT_J_MALLOC) {
+            return Memory.heapAlloc(arg1);
+        }
+        if (funcId == MSVCRT_J_FREE) {
+            if (arg1 != 0) {
+                Memory.heapFree(arg1);
+            }
+            return 0;
+        }
+        if (funcId == MSVCRT_J_CALLOC) {
+            long total = arg1 * arg2;
+            long ptr = Memory.heapAlloc(total);
+            if (ptr != 0) {
+                Native.memset(ptr, 0, total);
+            }
+            return ptr;
+        }
+        if (funcId == MSVCRT_J_REALLOC) {
+            return msvcrt_java_realloc(arg1, arg2);
+        }
+
+        // Batch F: Wide-string functions
+        if (funcId == MSVCRT_J_WCSNICMP) {
+            return msvcrt_java_wcsnicmp(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_WCSCAT_S) {
+            return msvcrt_java_wcscat_s(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_WCSCPY_S) {
+            return msvcrt_java_wcscpy_s(arg1, arg2, arg3);
+        }
+        if (funcId == MSVCRT_J_ULTOW) {
+            return msvcrt_java_ultow(arg1, arg2, (int)arg3);
+        }
+
+        // Batch G: Misc
+        if (funcId == MSVCRT_J_SETLOCALE) {
+            return msvcrt_java_setlocale();
+        }
+        if (funcId == MSVCRT_J_IOBFUNC) {
+            return msvcrt_java_iob_func((int)arg1);
+        }
+        if (funcId == MSVCRT_J_STRTOL) {
+            return msvcrt_java_strtol(arg1, arg2, (int)arg3);
+        }
+
+        return 0;
+    }
+
+    // ===================================================================
+    // MSVCRT JAVA IMPLEMENTATIONS
+    // ===================================================================
+
+    private static long msvcrt_java_strlen(long s) {
+        long len = 0;
+        while ((Native.readMemoryLong(s + len) & 0xFF) != 0) {
+            len = len + 1;
+        }
+        return len;
+    }
+
+    private static long msvcrt_java_strcmp(long a, long b) {
+        long i = 0;
+        while (true) {
+            int ca = (int)(Native.readMemoryLong(a + i) & 0xFF);
+            int cb = (int)(Native.readMemoryLong(b + i) & 0xFF);
+            if (ca != cb) return (long)(ca - cb);
+            if (ca == 0) return 0;
+            i = i + 1;
+        }
+    }
+
+    private static long msvcrt_java_strncmp(long a, long b, long n) {
+        long i = 0;
+        while (i < n) {
+            int ca = (int)(Native.readMemoryLong(a + i) & 0xFF);
+            int cb = (int)(Native.readMemoryLong(b + i) & 0xFF);
+            if (ca != cb) return (long)(ca - cb);
+            if (ca == 0) return 0;
+            i = i + 1;
+        }
+        return 0;
+    }
+
+    private static long msvcrt_java_strcpy(long dst, long src) {
+        long i = 0;
+        while (true) {
+            int c = (int)(Native.readMemoryLong(src + i) & 0xFF);
+            Native.writeMemory(dst + i, (char)c);
+            if (c == 0) break;
+            i = i + 1;
+        }
+        return dst;
+    }
+
+    private static long msvcrt_java_strncpy(long dst, long src, long n) {
+        long i = 0;
+        while (i < n) {
+            int c = (int)(Native.readMemoryLong(src + i) & 0xFF);
+            Native.writeMemory(dst + i, (char)c);
+            if (c == 0) {
+                i = i + 1;
+                while (i < n) {
+                    Native.writeMemory(dst + i, (char)0);
+                    i = i + 1;
+                }
+                return dst;
+            }
+            i = i + 1;
+        }
+        return dst;
+    }
+
+    private static long msvcrt_java_strcat(long dst, long src) {
+        long d = dst;
+        while ((Native.readMemoryLong(d) & 0xFF) != 0) {
+            d = d + 1;
+        }
+        long i = 0;
+        while (true) {
+            int c = (int)(Native.readMemoryLong(src + i) & 0xFF);
+            Native.writeMemory(d + i, (char)c);
+            if (c == 0) break;
+            i = i + 1;
+        }
+        return dst;
+    }
+
+    private static long msvcrt_java_strchr(long s, long c) {
+        int target = (int)(c & 0xFF);
+        long i = 0;
+        while (true) {
+            int ch = (int)(Native.readMemoryLong(s + i) & 0xFF);
+            if (ch == target) return s + i;
+            if (ch == 0) return 0;
+            i = i + 1;
+        }
+    }
+
+    private static long msvcrt_java_strrchr(long s, long c) {
+        int target = (int)(c & 0xFF);
+        long last = 0;
+        long i = 0;
+        while (true) {
+            int ch = (int)(Native.readMemoryLong(s + i) & 0xFF);
+            if (ch == target) last = s + i;
+            if (ch == 0) break;
+            i = i + 1;
+        }
+        if (target == 0) return s + i;
+        return last;
+    }
+
+    private static long msvcrt_java_puts(long s) {
+        if (s == 0) return -1;
+        long i = 0;
+        while (true) {
+            int c = (int)(Native.readMemoryLong(s + i) & 0xFF);
+            if (c == 0) break;
+            Console.writeChar((char)c);
+            i = i + 1;
+        }
+        Console.writeChar('\n');
+        return 0;
+    }
+
+    private static long msvcrt_java_memcmp(long a, long b, long n) {
+        long i = 0;
+        while (i < n) {
+            int ba = (int)(Native.readMemoryLong(a + i) & 0xFF);
+            int bb = (int)(Native.readMemoryLong(b + i) & 0xFF);
+            if (ba != bb) return (long)(ba - bb);
+            i = i + 1;
+        }
+        return 0;
+    }
+
+    private static long msvcrt_java_memmove(long dst, long src, long n) {
+        if (dst < src) {
+            Native.memcpy(dst, src, n);
+        } else if (dst > src) {
+            long i = n;
+            while (i > 0) {
+                i = i - 1;
+                int b = (int)(Native.readMemoryLong(src + i) & 0xFF);
+                Native.writeMemory(dst + i, (char)b);
+            }
+        }
+        return dst;
+    }
+
+    private static long msvcrt_java_realloc(long ptr, long size) {
+        if (ptr == 0) return Memory.heapAlloc(size);
+        if (size == 0) {
+            Memory.heapFree(ptr);
+            return 0;
+        }
+        long np = Memory.heapAlloc(size);
+        if (np != 0) {
+            long oldSize = Memory.getAllocatedBlockSize(ptr);
+            long copySize = oldSize;
+            if (size < copySize) copySize = size;
+            Native.memcpy(np, ptr, copySize);
+            Memory.heapFree(ptr);
+        }
+        return np;
+    }
+
+    private static long msvcrt_java_atoi(long s) {
+        return msvcrt_java_strtol(s, 0, 10);
+    }
+
+    private static long msvcrt_java_strtol(long s, long endptrAddr, int base) {
+        long result = 0;
+        int neg = 0;
+        long pos = s;
+        // Skip whitespace
+        int ch = (int)(Native.readMemoryLong(pos) & 0xFF);
+        while (ch == 32 || ch == 9) {
+            pos = pos + 1;
+            ch = (int)(Native.readMemoryLong(pos) & 0xFF);
+        }
+        // Sign
+        if (ch == 45) { neg = 1; pos = pos + 1; ch = (int)(Native.readMemoryLong(pos) & 0xFF); }
+        else if (ch == 43) { pos = pos + 1; ch = (int)(Native.readMemoryLong(pos) & 0xFF); }
+        // Auto-detect base
+        if (base == 0) {
+            if (ch == 48) {
+                int next = (int)(Native.readMemoryLong(pos + 1) & 0xFF);
+                if (next == 120 || next == 88) { base = 16; pos = pos + 2; }
+                else { base = 8; pos = pos + 1; }
+            } else {
+                base = 10;
+            }
+        }
+        if (base == 16 && ch == 48) {
+            int next = (int)(Native.readMemoryLong(pos + 1) & 0xFF);
+            if (next == 120 || next == 88) { pos = pos + 2; }
+        }
+        // Parse digits
+        ch = (int)(Native.readMemoryLong(pos) & 0xFF);
+        while (ch != 0) {
+            int digit = -1;
+            if (ch >= 48 && ch <= 57) digit = ch - 48;
+            else if (ch >= 97 && ch <= 102) digit = ch - 97 + 10;
+            else if (ch >= 65 && ch <= 70) digit = ch - 65 + 10;
+            if (digit < 0 || digit >= base) break;
+            result = result * (long)base + (long)digit;
+            pos = pos + 1;
+            ch = (int)(Native.readMemoryLong(pos) & 0xFF);
+        }
+        // Write endptr
+        if (endptrAddr != 0) {
+            Native.writeMemoryLong(endptrAddr, pos);
+        }
+        if (neg != 0) return -result;
+        return result;
+    }
+
+    // Wide-string functions
+    private static int readWChar(long addr) {
+        int lo = (int)(Native.readMemoryLong(addr) & 0xFF);
+        int hi = (int)(Native.readMemoryLong(addr + 1) & 0xFF);
+        return lo | (hi << 8);
+    }
+
+    private static void writeWChar(long addr, int val) {
+        Native.writeMemory(addr, (char)(val & 0xFF));
+        Native.writeMemory(addr + 1, (char)((val >> 8) & 0xFF));
+    }
+
+    private static long msvcrt_java_wcsnicmp(long s1, long s2, long n) {
+        long i = 0;
+        while (i < n) {
+            int c1 = readWChar(s1 + i * 2);
+            int c2 = readWChar(s2 + i * 2);
+            if (c1 >= 65 && c1 <= 90) c1 = c1 + 32;
+            if (c2 >= 65 && c2 <= 90) c2 = c2 + 32;
+            if (c1 != c2) return (long)(c1 - c2);
+            if (c1 == 0) return 0;
+            i = i + 1;
+        }
+        return 0;
+    }
+
+    private static long msvcrt_java_wcscat_s(long dst, long dstsize, long src) {
+        if (dst == 0 || src == 0 || dstsize == 0) return 22;
+        long dlen = 0;
+        while (dlen < dstsize && readWChar(dst + dlen * 2) != 0) {
+            dlen = dlen + 1;
+        }
+        if (dlen >= dstsize) return 22;
+        long i = 0;
+        while (readWChar(src + i * 2) != 0 && dlen + i + 1 < dstsize) {
+            writeWChar(dst + (dlen + i) * 2, readWChar(src + i * 2));
+            i = i + 1;
+        }
+        writeWChar(dst + (dlen + i) * 2, 0);
+        return 0;
+    }
+
+    private static long msvcrt_java_wcscpy_s(long dst, long dstsize, long src) {
+        if (dst == 0 || dstsize == 0) return 22;
+        if (src == 0) {
+            writeWChar(dst, 0);
+            return 22;
+        }
+        long i = 0;
+        while (readWChar(src + i * 2) != 0 && i + 1 < dstsize) {
+            writeWChar(dst + i * 2, readWChar(src + i * 2));
+            i = i + 1;
+        }
+        writeWChar(dst + i * 2, 0);
+        return 0;
+    }
+
+    private static long msvcrt_java_ultow(long val, long buf, int radix) {
+        if (buf == 0 || radix < 2 || radix > 36) return 0;
+        // Use a temporary array for digit reversal
+        int len = 0;
+        long tmp = val & 0xFFFFFFFFL;
+        int[] digits = new int[24];
+        if (tmp == 0) {
+            digits[len] = 48;
+            len = len + 1;
+        } else {
+            while (tmp > 0 && len < 23) {
+                int digit = (int)(tmp % (long)radix);
+                if (digit < 10) digits[len] = 48 + digit;
+                else digits[len] = 97 + digit - 10;
+                len = len + 1;
+                tmp = tmp / (long)radix;
+            }
+        }
+        // Reverse into buf
+        int i = 0;
+        while (i < len) {
+            writeWChar(buf + (long)i * 2, digits[len - 1 - i]);
+            i = i + 1;
+        }
+        writeWChar(buf + (long)len * 2, 0);
+        return buf;
+    }
+
+    private static long msvcrt_java_setlocale() {
+        if (localeStringAddr == 0) {
+            localeStringAddr = Memory.heapAlloc(4);
+            if (localeStringAddr != 0) {
+                Native.writeMemory(localeStringAddr, 'C');
+                Native.writeMemory(localeStringAddr + 1, (char)0);
+            }
+        }
+        return localeStringAddr;
+    }
+
+    private static long msvcrt_java_iob_func(int index) {
+        if (fakeIobAddr == 0) {
+            // Allocate 3 fake FILE handles (8 bytes each)
+            fakeIobAddr = Memory.heapAlloc(24);
+            if (fakeIobAddr != 0) {
+                Native.writeMemoryLong(fakeIobAddr, 0);
+                Native.writeMemoryLong(fakeIobAddr + 8, 1);
+                Native.writeMemoryLong(fakeIobAddr + 16, 2);
+            }
+        }
+        if (index == 0) return fakeIobAddr;
+        if (index == 1) return fakeIobAddr + 8;
+        if (index == 2) return fakeIobAddr + 16;
+        return 0;
+    }
+
+    // ===================================================================
     // KERNEL32 FUNCTION DISPATCH
     // ===================================================================
 
     public static long handleKernel32Call(int funcId, long arg1, long arg2, long arg3, long arg4) {
-        long arg5 = Syscalls.getSyscallArg4();
+        long arg5 = Syscalls.getSyscallArg5();
+        long arg6 = Syscalls.getSyscallArg6();
+        long arg7 = Syscalls.getSyscallArg7();
 
         if (funcId == FUNC_GET_STD_HANDLE) {
             return kernel32_GetStdHandle((int)arg1);
@@ -1609,7 +2289,7 @@ public class Loader {
         } else if (funcId == FUNC_GET_CONSOLE_OUTPUT_CP) {
             return 437; // CP 437
         } else if (funcId == FUNC_FORMAT_MESSAGE_W) {
-            return 0; // failure
+            return kernel32_FormatMessageW(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         } else if (funcId == FUNC_HEAP_SET_INFORMATION) {
             return 1; // TRUE
         } else if (funcId == FUNC_SET_THREAD_UI_LANGUAGE) {
@@ -1635,6 +2315,19 @@ public class Loader {
             return 0;
         } else if (funcId == FUNC_GET_MODULE_HANDLE_W) {
             return peLoadedBase;
+        } else if (funcId == FUNC_LOAD_LIBRARY_W) {
+            return kernel32_LoadLibraryW(arg1);
+        } else if (funcId == FUNC_GET_PROC_ADDRESS) {
+            return kernel32_GetProcAddress(arg1, arg2);
+        } else if (funcId == FUNC_FREE_LIBRARY) {
+            return 1; // TRUE
+        } else if (funcId == FUNC_GET_SYSTEM_DIRECTORY_W) {
+            return kernel32_GetSystemDirectoryW(arg1, (int)arg2);
+        } else if (funcId == FUNC_GET_STARTUP_INFO_W) {
+            kernel32_GetStartupInfoW(arg1);
+            return 0;
+        } else if (funcId == FUNC_SET_UNHANDLED_EXC_FILTER) {
+            return 0; // NULL
         }
         return 0;
     }
@@ -2055,6 +2748,73 @@ public class Loader {
             writeUInt32LE_raw(lpWritten, (int)nChars);
         }
         return 1; // TRUE
+    }
+
+    private static long kernel32_LoadLibraryW(long lpFileName) {
+        // Stub: return a fake module handle (non-zero = success)
+        // In reality, we'd need to load the DLL, but for now just return success
+        if (lpFileName == 0) return 0;
+        return 0x10002L; // Fake module handle
+    }
+
+    private static long kernel32_GetProcAddress(long hModule, long lpProcName) {
+        // Stub: return 0 (function not found)
+        // In reality, we'd look up the function in the loaded DLL
+        return 0;
+    }
+
+    private static long kernel32_GetSystemDirectoryW(long lpBuffer, int uSize) {
+        // Return "C:\Windows\System32" in wide char
+        // That's 20 chars + null = 21 wide chars = 42 bytes
+        if (lpBuffer == 0 || uSize < 21) return 0;
+        // Write "C:\Windows\System32" as wide chars
+        char[] sysDir = new char[20];
+        sysDir[0] = 'C'; sysDir[1] = ':'; sysDir[2] = '\\';
+        sysDir[3] = 'W'; sysDir[4] = 'i'; sysDir[5] = 'n'; sysDir[6] = 'd'; sysDir[7] = 'o'; sysDir[8] = 'w'; sysDir[9] = 's';
+        sysDir[10] = '\\'; sysDir[11] = 'S'; sysDir[12] = 'y'; sysDir[13] = 's'; sysDir[14] = 't'; sysDir[15] = 'e'; sysDir[16] = 'm'; sysDir[17] = '3'; sysDir[18] = '2';
+        int i = 0;
+        while (i < 19) {
+            // Write wide char (2 bytes per char)
+            Native.writeMemory(lpBuffer + i * 2, sysDir[i]);
+            Native.writeMemory(lpBuffer + i * 2 + 1, (char)0);
+            i = i + 1;
+        }
+        // Null terminator
+        Native.writeMemory(lpBuffer + i * 2, (char)0);
+        Native.writeMemory(lpBuffer + i * 2 + 1, (char)0);
+        return (long)i; // Return length (excluding null)
+    }
+
+    private static void kernel32_GetStartupInfoW(long lpStartupInfo) {
+        if (lpStartupInfo != 0) {
+            // STARTUPINFOW is 104 bytes on x64, just zero it
+            Native.memset(lpStartupInfo, 0, 104);
+            // cb = size = 104
+            writeUInt32LE_raw(lpStartupInfo, 104);
+        }
+    }
+
+    private static long kernel32_FormatMessageW(long dwFlags, long lpSource, long dwMessageId, long dwLanguageId, long lpBuffer, long nSize, long lpArguments) {
+        // FormatMessageW implementation
+        // For now, just return a simple message if buffer is provided
+        if (lpBuffer != 0 && nSize > 0) {
+            // Write "Message not found" as wide string
+            char[] msg = new char[18];
+            msg[0] = 'M'; msg[1] = 'e'; msg[2] = 's'; msg[3] = 's'; msg[4] = 'a'; msg[5] = 'g'; msg[6] = 'e'; msg[7] = ' ';
+            msg[8] = 'n'; msg[9] = 'o'; msg[10] = 't'; msg[11] = ' '; msg[12] = 'f'; msg[13] = 'o'; msg[14] = 'u'; msg[15] = 'n'; msg[16] = 'd'; msg[17] = 0;
+            int i = 0;
+            while (i < 18 && i < nSize) {
+                Native.writeMemory(lpBuffer + i * 2, msg[i]);
+                Native.writeMemory(lpBuffer + i * 2 + 1, (char)0);
+                i = i + 1;
+            }
+            if (i < nSize) {
+                Native.writeMemory(lpBuffer + i * 2, (char)0);
+                Native.writeMemory(lpBuffer + i * 2 + 1, (char)0);
+            }
+            return (long)i;
+        }
+        return 0;
     }
 
     // ===================================================================

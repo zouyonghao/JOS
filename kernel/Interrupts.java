@@ -194,13 +194,15 @@ public class Interrupts {
                 return;
             }
         }
-        Console.writeString("\nCPU EXCEPTION: vector ");
+        Console.writeString("\n*** KERNEL PANIC ***\n");
+        Console.writeString("CPU EXCEPTION: vector ");
         Console.writeNumber(vector);
         Console.writeString("\n  RIP=");
         Console.writeHex(crashRIP);
         Console.writeString("\n  errCode=");
         Console.writeHex(crashErrorCode);
         Console.writeString("\n");
+        Core.halt();
     }
     
     private static void handleScancode(char scancode) {

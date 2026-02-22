@@ -113,9 +113,9 @@ common_isr_handler:
     movq 112(%rsp), %rax
     movq %rax, kernel_Syscalls_syscallNum(%rip)        # RAX = syscall number
     
-    # Check if this is a kernel32 call (syscallNum 1-64)
-    # For kernel32 calls, use Windows convention: RCX, RDX, R8, R9
-    cmpq $128, %rax
+    # Check if this is a kernel32/msvcrt call (syscallNum 1-199)
+    # For these calls, use Windows convention: RCX, RDX, R8, R9
+    cmpq $199, %rax
     jg .linux_convention
     testq %rax, %rax
     jle .linux_convention

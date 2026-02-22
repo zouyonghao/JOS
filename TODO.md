@@ -23,6 +23,8 @@
 - [x] kernel32.dll emulation (60 functions: handles, heap, files, threads, console, TLS, etc.)
 - [x] msvcrt.dll emulation (50 functions: printf, malloc, string ops, wide-char, CRT init, etc.)
 - [x] Run real Windows binaries (help.exe from System32)
+- [ ] Run more complex Windows binaries (.exe from System32 or other meaningful executables)
+- [ ] Run a GUI Windows binary
 - [ ] User mode (ring 3) with syscall/sysret interface
 - [ ] Process abstraction (per-process page tables, register save/restore)
 - [ ] ELF loader (proper ELF format support)

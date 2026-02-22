@@ -22,6 +22,7 @@ BUILDDIR = ./build
 
 BB.bin : $(BUILDDIR) $(OBJLIST)
 	$(CC) $(OBJLIST) -o $(BUILDDIR)/BB.bin $(CFLAGS) $(LDFLAGS) $(64BITFLAGS) $(DIRECTIVES) -T $(LINKER) $(OPTFLAGS)
+	@python3 check_size.py $(BUILDDIR)/BB.bin
 
 qemu: BB.bin
 	$(QEMUCMD) $(QEMUFLAGS)$(BUILDDIR)/BB.bin
