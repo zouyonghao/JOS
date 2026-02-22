@@ -1,0 +1,9 @@
+package kernel;
+
+import java.lang.annotation.*;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface CName {
+    String value();
+}

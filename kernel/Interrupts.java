@@ -55,7 +55,13 @@ public class Interrupts {
         initPIT();
         Native.enableInterrupts();
     }
-    
+
+    // Called from assembly ISR stubs - must have exact name "interrupt_dispatch"
+    @CName("interrupt_dispatch")
+    public static void dispatch(long vector) {
+        handleInterrupt((int)vector);
+    }
+
     private static void initIDT() {
         int vector = 0;
         while (vector < 256) {

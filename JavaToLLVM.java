@@ -79,6 +79,9 @@ public class JavaToLLVM {
         int accessFlags;
         byte[] code;
         int maxStack, maxLocals;
+        String cname;          // @CName annotation value
+        String inlineAsm;      // @InlineAsm value (asm template)
+        String asmConstraints; // @InlineAsm constraints
     }
 
     // =========================================================================
@@ -266,11 +269,84 @@ public class JavaToLLVM {
                         int len = dis.readInt();
                         dis.skipBytes(len);
                     }
+                } else if (attrName.equals("RuntimeVisibleAnnotations")) {
+                    parseAnnotations(dis, m);
                 } else {
                     dis.skipBytes(attrLen);
                 }
             }
             currentClass.methods.add(m);
+        }
+    }
+
+    static void parseAnnotations(DataInputStream dis, MethodInfo m) throws Exception {
+        int numAnnotations = dis.readUnsignedShort();
+        for (int a = 0; a < numAnnotations; a++) {
+            String typeDesc = cpUtf8(dis.readUnsignedShort());
+            int numPairs = dis.readUnsignedShort();
+            if (typeDesc.equals("Lkernel/CName;")) {
+                for (int p = 0; p < numPairs; p++) {
+                    String elemName = cpUtf8(dis.readUnsignedShort());
+                    int tag = dis.readUnsignedByte(); // 's' for string
+                    if (elemName.equals("value") && tag == 's') {
+                        m.cname = cpUtf8(dis.readUnsignedShort());
+                    } else {
+                        skipElementValue(dis, tag);
+                    }
+                }
+            } else if (typeDesc.equals("Lkernel/InlineAsm;")) {
+                for (int p = 0; p < numPairs; p++) {
+                    String elemName = cpUtf8(dis.readUnsignedShort());
+                    int tag = dis.readUnsignedByte();
+                    if (tag == 's') {
+                        String val = cpUtf8(dis.readUnsignedShort());
+                        if (elemName.equals("value")) m.inlineAsm = val;
+                        else if (elemName.equals("constraints")) m.asmConstraints = val;
+                    } else {
+                        skipElementValue(dis, tag);
+                    }
+                }
+            } else {
+                for (int p = 0; p < numPairs; p++) {
+                    dis.readUnsignedShort(); // element name
+                    skipElementValue(dis);
+                }
+            }
+        }
+    }
+
+    static void skipElementValue(DataInputStream dis) throws Exception {
+        int tag = dis.readUnsignedByte();
+        skipElementValue(dis, tag);
+    }
+
+    static void skipElementValue(DataInputStream dis, int tag) throws Exception {
+        switch ((char) tag) {
+            case 'B': case 'C': case 'D': case 'F': case 'I':
+            case 'J': case 'S': case 'Z': case 's':
+                dis.readUnsignedShort(); // const_value_index
+                break;
+            case 'e':
+                dis.readUnsignedShort(); // type_name_index
+                dis.readUnsignedShort(); // const_name_index
+                break;
+            case 'c':
+                dis.readUnsignedShort(); // class_info_index
+                break;
+            case '@':
+                dis.readUnsignedShort(); // type_index
+                int np = dis.readUnsignedShort();
+                for (int i = 0; i < np; i++) {
+                    dis.readUnsignedShort();
+                    skipElementValue(dis);
+                }
+                break;
+            case '[':
+                int numVals = dis.readUnsignedShort();
+                for (int i = 0; i < numVals; i++) {
+                    skipElementValue(dis);
+                }
+                break;
         }
     }
 
@@ -347,7 +423,8 @@ public class JavaToLLVM {
             currentClass = cls;
             for (MethodInfo m : cls.methods) {
                 if ((m.accessFlags & 0x0100) != 0) { // ACC_NATIVE
-                    String mangledName = mangleName(cls.name, m.name, m.descriptor);
+                    if (m.inlineAsm != null) continue; // inline asm emitted as function body
+                    String mangledName = (m.cname != null) ? m.cname : mangleName(cls.name, m.name, m.descriptor);
                     String retType = returnTypeFromDescriptor(m.descriptor);
                     List<String[]> params = parseParams(m.descriptor);
                     registerExtern(retType, mangledName, params);
@@ -360,7 +437,16 @@ public class JavaToLLVM {
             currentClass = cls;
             for (MethodInfo m : cls.methods) {
                 if (m.name.equals("<init>")) continue;
-                if ((m.accessFlags & 0x0100) != 0) continue;
+                if ((m.accessFlags & 0x0100) != 0) { // ACC_NATIVE
+                    if (m.inlineAsm != null) {
+                        emitInlineAsmFunction(m);
+                        emit("");
+                    } else if (m.cname != null) {
+                        emitCNameWrapper(m);
+                        emit("");
+                    }
+                    continue;
+                }
                 if (m.code == null) continue;
                 emitFunction(m);
                 emit("");
@@ -424,6 +510,7 @@ public class JavaToLLVM {
         stackTypes.clear();
 
         String mangledName = mangleName(className(), m.name, m.descriptor);
+        String emitName = mangledName;
         String retType = returnTypeFromDescriptor(m.descriptor);
         List<String[]> params = parseParams(m.descriptor);
 
@@ -497,6 +584,103 @@ public class JavaToLLVM {
         // Translate bytecodes
         translateMethod(m, localTypes, retType, m.name);
 
+        emit("}");
+
+        // If @CName is present on a regular method, emit an alias so external code can find it
+        if (m.cname != null) {
+            StringBuilder aliasType = new StringBuilder();
+            aliasType.append(retType).append(" (");
+            for (int i = 0; i < params.size(); i++) {
+                if (i > 0) aliasType.append(", ");
+                aliasType.append(params.get(i)[0]);
+            }
+            aliasType.append(")");
+            emit("@" + m.cname + " = alias " + aliasType + ", " + aliasType + "* @" + emitName);
+        }
+    }
+
+    // Emit a wrapper function that forwards to an external with a custom name
+    static void emitCNameWrapper(MethodInfo m) {
+        String mangledName = mangleName(className(), m.name, m.descriptor);
+        String retType = returnTypeFromDescriptor(m.descriptor);
+        List<String[]> params = parseParams(m.descriptor);
+
+        StringBuilder sig = new StringBuilder();
+        sig.append("define dso_local ").append(retType).append(" @").append(mangledName).append("(");
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sig.append(", ");
+            sig.append(params.get(i)[0]).append(" %p.").append(i);
+        }
+        sig.append(") {");
+        emit(sig.toString());
+        emit("entry:");
+
+        StringBuilder call = new StringBuilder();
+        if (!retType.equals("void")) {
+            call.append("  %ret = call ").append(retType).append(" @").append(m.cname).append("(");
+        } else {
+            call.append("  call void @").append(m.cname).append("(");
+        }
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) call.append(", ");
+            call.append(params.get(i)[0]).append(" %p.").append(i);
+        }
+        call.append(")");
+        emit(call.toString());
+
+        if (!retType.equals("void")) {
+            emit("  ret " + retType + " %ret");
+        } else {
+            emit("  ret void");
+        }
+        emit("}");
+    }
+
+    // Emit a function body with LLVM inline assembly
+    static void emitInlineAsmFunction(MethodInfo m) {
+        String mangledName = mangleName(className(), m.name, m.descriptor);
+        String retType = returnTypeFromDescriptor(m.descriptor);
+        List<String[]> params = parseParams(m.descriptor);
+
+        StringBuilder sig = new StringBuilder();
+        sig.append("define dso_local ").append(retType).append(" @").append(mangledName).append("(");
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sig.append(", ");
+            sig.append(params.get(i)[0]).append(" %p.").append(i);
+        }
+        sig.append(") {");
+        emit(sig.toString());
+        emit("entry:");
+
+        // Determine asm call return type: if void method has output constraint, use i64 temp
+        String asmRetType = retType;
+        boolean hasOutputConstraint = m.asmConstraints.startsWith("=");
+        if (retType.equals("void") && hasOutputConstraint) {
+            asmRetType = "i64";
+        }
+
+        // Count input operands (constraints after outputs, excluding clobbers ~)
+        // Operand numbering: outputs first, then inputs
+        StringBuilder call = new StringBuilder();
+        if (!asmRetType.equals("void")) {
+            call.append("  %result = call ").append(asmRetType);
+        } else {
+            call.append("  call void");
+        }
+        call.append(" asm sideeffect \"").append(m.inlineAsm).append("\", \"")
+            .append(m.asmConstraints).append("\"(");
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) call.append(", ");
+            call.append(params.get(i)[0]).append(" %p.").append(i);
+        }
+        call.append(")");
+        emit(call.toString());
+
+        if (!retType.equals("void")) {
+            emit("  ret " + retType + " %result");
+        } else {
+            emit("  ret void");
+        }
         emit("}");
     }
 

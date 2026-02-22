@@ -20,56 +20,6 @@ void free(void* ptr) {
   kernel_Memory_heapFree_Long((int64_t)ptr - 8);
 }
 
-// =============================================================================
-// Native method: Kernel.writeMemory(long, char)
-// =============================================================================
-
-#define SERIAL_PORT 0x3F8
-
-static void serial_write(char c) {
-  __asm__ volatile("outb %0, %1" : : "a"(c), "Nd"((uint16_t)SERIAL_PORT));
-}
-
-void kernel_Native_writeMemory_Long_Char(int64_t addr, int32_t _byte) {
-  if (addr >= 0xB8000 && addr <= 0xB8F9F) {
-    if ((addr - 0xB8000) % 2 == 0) {
-      serial_write((char)_byte);
-    }
-  }
-  if (addr == SERIAL_PORT) {
-    serial_write((char)_byte);
-  }
-  *((uint8_t *)addr) = (uint8_t)_byte;
-}
-
-// =============================================================================
-// Native method: Kernel.writeSerial(char)
-// =============================================================================
-
-void kernel_Native_writeSerial_Char(int32_t c) {
-  serial_write((char)c);
-}
-
-// =============================================================================
-// Native memory operations: memcpy, memset
-// =============================================================================
-
-void kernel_Native_memcpy_Long_Long_Long(int64_t dst, int64_t src, int64_t len) {
-  uint8_t *d = (uint8_t *)dst;
-  const uint8_t *s = (const uint8_t *)src;
-  for (int64_t i = 0; i < len; i++) {
-    d[i] = s[i];
-  }
-}
-
-void kernel_Native_memset_Long_Int_Long(int64_t dst, int32_t val, int64_t len) {
-  uint8_t *d = (uint8_t *)dst;
-  uint8_t v = (uint8_t)val;
-  for (int64_t i = 0; i < len; i++) {
-    d[i] = v;
-  }
-}
-
 // Standard C library stubs required by -Os optimizer (emits memcpy/memset/memmove calls)
 void *memcpy(void *dst, const void *src, size_t n) {
   uint8_t *d = (uint8_t *)dst;
@@ -97,6 +47,7 @@ void *memmove(void *dst, const void *src, size_t n) {
 
 // =============================================================================
 // String operations (plain null-terminated C strings)
+// Called by translator-generated invokevirtual on String objects
 // =============================================================================
 
 int32_t java_lang_String_length_Int(const char *str) {
@@ -119,186 +70,13 @@ uint32_t java_lang_String_charAt_Int_retChar(const char *str, int32_t index) {
 }
 
 // =============================================================================
-// Interrupt Handling (consolidated from interrupts.c)
+// ISR stub table accessor (array access that can't be expressed in Java)
 // =============================================================================
-
-extern void idt_set_gate(int vector, void* handler, uint8_t type_attr);
-extern void idt_load(void);
-extern void enable_interrupts(void);
-extern void disable_interrupts(void);
-extern void pic_send_eoi(uint8_t irq);
 
 extern void* isr_stub_table[];
-extern void* get_syscall_handler(void);
 
-static uint64_t timer_ticks = 0;
-
-// =============================================================================
-// Syscall Interface
-// =============================================================================
-
-extern int64_t syscallNum;
-extern int64_t syscallArg1;
-extern int64_t syscallArg2;
-extern int64_t syscallArg3;
-extern int64_t syscallRet;
-
-extern int64_t Kernel_handleSyscall_Long_Long_Long_Long(int64_t num, int64_t arg1, int64_t arg2, int64_t arg3);
-
-static inline void outb(uint16_t port, uint8_t value) {
-  __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port) {
-  uint8_t value;
-  __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
-  return value;
-}
-
-extern void kernel_Interrupts_handleInterrupt_Int(int32_t vector);
-
-extern int64_t Kernel_syscallNum;
-extern int64_t Kernel_syscallArg1;
-extern int64_t Kernel_syscallArg2;
-extern int64_t Kernel_syscallArg3;
-extern int64_t Kernel_syscallRet;
-
-void interrupt_dispatch(uint64_t vector) {
-  kernel_Interrupts_handleInterrupt_Int((int32_t)vector);
-}
-
-// =============================================================================
-// Native methods exposed to Java
-// =============================================================================
-
-int32_t kernel_Native_inb_Int(int32_t port) {
-  return (int32_t)inb((uint16_t)port);
-}
-
-int32_t kernel_Native_inw_Int(int32_t port) {
-  uint16_t value;
-  __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"((uint16_t)port));
-  return (int32_t)value;
-}
-
-void kernel_Native_outb_Int_Char(int32_t port, int32_t data) {
-  outb((uint16_t)port, (uint8_t)data);
-}
-
-void kernel_Native_outw_Int_Int(int32_t port, int32_t data) {
-  __asm__ volatile("outw %0, %w1" : : "a"((uint16_t)data), "d"((uint16_t)port));
-}
-
-void kernel_Native_outl_Int_Int(int32_t port, int32_t data) {
-  uint16_t port16 = (uint16_t)port;
-  __asm__ volatile("outl %0, %w1" : : "a"(data), "d"(port16));
-}
-
-// =============================================================================
-// Memory access (64-bit)
-// =============================================================================
-
-int64_t kernel_Native_readMemoryLong_Long(int64_t addr) {
-  return *(int64_t*)addr;
-}
-
-void kernel_Native_writeMemoryLong_Long_Long(int64_t addr, int64_t data) {
-  *(int64_t*)addr = data;
-}
-
-// =============================================================================
-// Paging control
-// =============================================================================
-
-int64_t kernel_Native_getCR3_V(void) {
-  int64_t val;
-  __asm__ volatile("mov %%cr3, %0" : "=r"(val));
-  return val;
-}
-
-void kernel_Native_setCR3_Long(int64_t val) {
-  __asm__ volatile("mov %0, %%cr3" : : "r"(val));
-}
-
-void kernel_Native_enablePaging_V(void) {
-  int64_t cr0;
-  __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-  cr0 |= 0x80000000;
-  __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
-}
-
-void kernel_Native_setIDTGate_Int_Long_Char(int32_t vector, int64_t handlerAddr, int32_t typeAttr) {
-  (void)handlerAddr;
-  if (vector >= 0 && vector < 48) {
-    idt_set_gate(vector, isr_stub_table[vector], (uint8_t)typeAttr);
-  } else if (vector == 0x80) {
-    void* handler = get_syscall_handler();
-    idt_set_gate(vector, handler, (uint8_t)typeAttr);
-  }
-}
-
-void kernel_Native_loadIDT_V(void) {
-  idt_load();
-}
-
-void kernel_Native_sendEOI_Int(int32_t irq) {
-  pic_send_eoi((uint8_t)irq);
-}
-
-void kernel_Native_enableInterrupts_V(void) {
-  enable_interrupts();
-}
-
-void kernel_Native_disableInterrupts_V(void) {
-  disable_interrupts();
-}
-
-int64_t kernel_Native_getTicks_V(void) {
-  return timer_ticks;
-}
-
-void kernel_Native_incTicks_V(void) {
-  timer_ticks++;
-}
-
-// =============================================================================
-// Native method: callProgram
-// =============================================================================
-
-void kernel_Native_callProgram_Long(int64_t entryPoint) {
-  void (*prog)() = (void (*)())entryPoint;
-  prog();
-}
-
-// =============================================================================
-// Windows Syscall MSR Initialization
-// =============================================================================
-
-extern void init_syscall_msr(void);
-
-void kernel_Native_initSyscallMSR_V(void) {
-  init_syscall_msr();
-}
-
-// =============================================================================
-// CR2 read (for page fault address)
-// =============================================================================
-
-int64_t kernel_Native_readCR2_V(void) {
-  int64_t val;
-  __asm__ volatile("mov %%cr2, %0" : "=r"(val));
-  return val;
-}
-
-// =============================================================================
-// GS Base MSR (for Windows TEB emulation)
-// =============================================================================
-
-void kernel_Native_setGSBase_Long(int64_t addr) {
-  uint32_t lo = (uint32_t)(addr & 0xFFFFFFFF);
-  uint32_t hi = (uint32_t)((addr >> 32) & 0xFFFFFFFF);
-  // MSR 0xC0000101 = IA32_GS_BASE
-  __asm__ volatile("wrmsr" : : "c"(0xC0000101), "a"(lo), "d"(hi));
+int64_t kernel_Native_getIsrStubAddr_Int(int32_t idx) {
+  return (int64_t)(uintptr_t)isr_stub_table[idx];
 }
 
 // =============================================================================
